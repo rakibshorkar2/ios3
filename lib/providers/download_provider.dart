@@ -17,6 +17,7 @@ import '../models/download_item.dart';
 import '../services/dio_client.dart';
 import '../services/html_parser.dart';
 import '../services/database_helper.dart';
+import '../services/torrent_download_service.dart';
 import '../models/directory_item.dart';
 
 class DownloadProvider with ChangeNotifier {
@@ -51,6 +52,21 @@ class DownloadProvider with ChangeNotifier {
   void Function()? onAllDownloadsComplete;
 
   bool _backgroundServicesRunning = false;
+
+  // Proxy settings for torrent downloads
+  bool _torrentProxyEnabled = false;
+  String? _torrentProxyHost;
+  int? _torrentProxyPort;
+  String? _torrentProxyUser;
+  String? _torrentProxyPass;
+
+  void setTorrentProxySettings(bool enabled, {String? host, int? port, String? username, String? password}) {
+    _torrentProxyEnabled = enabled;
+    _torrentProxyHost = host;
+    _torrentProxyPort = port;
+    _torrentProxyUser = username;
+    _torrentProxyPass = password;
+  }
 
   double get totalStorage => _totalStorage;
   double get freeStorage => _freeStorage;
@@ -252,6 +268,13 @@ class DownloadProvider with ChangeNotifier {
 
     final id = '${DateTime.now().millisecondsSinceEpoch}_${url.hashCode}';
 
+    // Route magnet links to torrent download path
+    if (url.startsWith('magnet:')) {
+      await addTorrentDownload(url, fileName, saveDir,
+          batchId: batchId, batchName: batchName);
+      return;
+    }
+
     // Apply Smart Folder Routing if enabled
     String finalSaveDir = saveDir;
     final prefs = await SharedPreferences.getInstance();
@@ -290,6 +313,50 @@ class DownloadProvider with ChangeNotifier {
       savePath: savePath,
       batchId: batchId,
       batchName: batchName,
+    ));
+
+    await DatabaseHelper().insertDownload(_queue.last);
+    await updateStorageInfo();
+    notifyListeners();
+    _processQueue();
+  }
+
+  Future<void> addTorrentDownload(
+    String url,
+    String fileName,
+    String saveDir, {
+    String? batchId,
+    String? batchName,
+    String? torrentHash,
+    String? torrentDisplayName,
+    String? torrentTrackers,
+    List<int>? selectedFileIndices,
+  }) async {
+    if (_queue.any((i) => i.url == url)) {
+      final existing = _queue.firstWhere((i) => i.url == url);
+      if (existing.status == DownloadStatus.paused ||
+          existing.status == DownloadStatus.error) {
+        resume(existing.id);
+      }
+      return;
+    }
+
+    final id = '${DateTime.now().millisecondsSinceEpoch}_${url.hashCode}';
+    final finalSaveDir = saveDir;
+    final savePath = p.join(finalSaveDir, fileName);
+
+    _queue.add(DownloadItem(
+      id: id,
+      url: url,
+      fileName: fileName,
+      savePath: savePath,
+      batchId: batchId,
+      batchName: batchName,
+      downloadType: DownloadType.torrent,
+      torrentHash: torrentHash,
+      torrentDisplayName: torrentDisplayName,
+      torrentTrackers: torrentTrackers,
+      selectedFileIndices: selectedFileIndices ?? [],
     ));
 
     await DatabaseHelper().insertDownload(_queue.last);
@@ -347,8 +414,12 @@ class DownloadProvider with ChangeNotifier {
     final item = _queue.firstWhere((i) => i.id == id);
 
     if (item.status == DownloadStatus.downloading) {
-      _cancelTokens[id]?.cancel('Paused by user');
-      _cancelTokens.remove(id);
+      if (item.isTorrent) {
+        TorrentDownloadService().pause(id);
+      } else {
+        _cancelTokens[id]?.cancel('Paused by user');
+        _cancelTokens.remove(id);
+      }
       item.status = DownloadStatus.paused;
       item.speedBytesPerSec = 0;
       notifyListeners();
@@ -372,6 +443,15 @@ class DownloadProvider with ChangeNotifier {
 
   void resume(String id) {
     final item = _queue.firstWhere((i) => i.id == id);
+    if (item.isTorrent && item.status == DownloadStatus.paused) {
+      TorrentDownloadService().resume(id);
+      item.status = DownloadStatus.downloading;
+      item.speedBytesPerSec = 0;
+      _saveQueue();
+      notifyListeners();
+      _syncLiveActivityState();
+      return;
+    }
     item.status = DownloadStatus.queued;
     item.errorMessage = null;
     _saveQueue();
@@ -385,8 +465,12 @@ class DownloadProvider with ChangeNotifier {
     final item = _queue.firstWhere((i) => i.id == id);
 
     if (item.status == DownloadStatus.downloading) {
-      _cancelTokens[id]?.cancel('Stopped by user');
-      _cancelTokens.remove(id);
+      if (item.isTorrent) {
+        TorrentDownloadService().stop(id);
+      } else {
+        _cancelTokens[id]?.cancel('Stopped by user');
+        _cancelTokens.remove(id);
+      }
     }
 
     _queue.removeWhere((i) => i.id == id);
@@ -445,8 +529,12 @@ class DownloadProvider with ChangeNotifier {
     final batchItems = _queue.where((i) => i.batchId == batchId).toList();
     for (var i in batchItems) {
       if (i.status == DownloadStatus.downloading) {
-        _cancelTokens[i.id]?.cancel('Stopped by user');
-        _cancelTokens.remove(i.id);
+        if (i.isTorrent) {
+          TorrentDownloadService().stop(i.id);
+        } else {
+          _cancelTokens[i.id]?.cancel('Stopped by user');
+          _cancelTokens.remove(i.id);
+        }
       }
       DatabaseHelper().deleteDownload(i.id);
     }
@@ -519,8 +607,13 @@ class DownloadProvider with ChangeNotifier {
 
   void deleteSelected({bool deleteFiles = false}) {
     for (String id in _selectedIds) {
-      _cancelTokens[id]?.cancel('Deleted by user');
-      _cancelTokens.remove(id);
+      final item = _queue.firstWhere((i) => i.id == id, orElse: () => DownloadItem(id: '', url: '', fileName: '', savePath: ''));
+      if (item.id.isNotEmpty && item.isTorrent) {
+        TorrentDownloadService().stop(id);
+      } else {
+        _cancelTokens[id]?.cancel('Deleted by user');
+        _cancelTokens.remove(id);
+      }
 
       if (deleteFiles) {
         final itemIndex = _queue.indexWhere((i) => i.id == id);
@@ -551,13 +644,19 @@ class DownloadProvider with ChangeNotifier {
   }
 
   void pauseAll() {
-    // 1. Cancel all active transfers
+    // 1. Cancel all active HTTP transfers
     for (final id in _cancelTokens.keys.toList()) {
       _cancelTokens[id]?.cancel('Paused by user');
       _cancelTokens.remove(id);
     }
+    // 2. Pause all active torrent transfers
+    for (final item in _queue) {
+      if (item.isTorrent && item.status == DownloadStatus.downloading) {
+        TorrentDownloadService().pause(item.id);
+      }
+    }
 
-    // 2. Set all queued items to paused
+    // 3. Set all queued/downloading items to paused
     for (final item in _queue) {
       if (item.status == DownloadStatus.queued ||
           item.status == DownloadStatus.downloading) {
@@ -626,12 +725,68 @@ class DownloadProvider with ChangeNotifier {
           }
         }
 
-        _startDownload(nextItem);
+        if (nextItem.isTorrent) {
+          _startTorrentDownload(nextItem);
+        } else {
+          _startDownload(nextItem);
+        }
       }
     } finally {
       _isProcessingQueue = false;
       _syncLiveActivityState();
     }
+  }
+
+  Future<void> _startTorrentDownload(DownloadItem item) async {
+    _activeCount++;
+    item.status = DownloadStatus.downloading;
+    notifyListeners();
+    await DatabaseHelper().updateDownload(item);
+
+    final service = TorrentDownloadService();
+    if (_torrentProxyEnabled && _torrentProxyHost != null) {
+      service.setProxySettings(
+        host: _torrentProxyHost!,
+        port: _torrentProxyPort ?? 1080,
+        username: _torrentProxyUser,
+        password: _torrentProxyPass,
+      );
+    }
+
+    await service.startDownload(item);
+
+    service.onProgress(item.id, (progress) {
+      item.downloadedBytes = progress.downloadedBytes;
+      item.totalBytes = progress.totalBytes;
+      item.speedBytesPerSec = progress.downloadSpeed;
+      item.uploadSpeedBytesPerSec = progress.uploadSpeed;
+      item.etaSeconds = progress.etaSeconds;
+      item.torrentSeeders = progress.seeders;
+      item.torrentPeers = progress.peers;
+      notifyListeners();
+      DatabaseHelper().updateDownload(item);
+    });
+
+    service.onComplete(item.id, () {
+      item.status = DownloadStatus.done;
+      item.speedBytesPerSec = 0;
+      item.uploadSpeedBytesPerSec = 0;
+      item.etaSeconds = 0;
+      if (_activeCount > 0) _activeCount--;
+      DatabaseHelper().updateDownload(item);
+      updateStorageInfo();
+      notifyListeners();
+      _processQueue();
+    });
+
+    service.onError(item.id, (error) {
+      item.status = DownloadStatus.error;
+      item.errorMessage = error;
+      if (_activeCount > 0) _activeCount--;
+      DatabaseHelper().updateDownload(item);
+      notifyListeners();
+      _processQueue();
+    });
   }
 
   Future<void> _startDownload(DownloadItem item) async {

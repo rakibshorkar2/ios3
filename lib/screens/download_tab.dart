@@ -535,6 +535,28 @@ class _DownloadTabState extends State<DownloadTab> {
                     Text(item.errorMessage!,
                         style: TextStyle(color: cs.error, fontSize: 11)),
                   ],
+                  if (item.isTorrent && item.status == DownloadStatus.downloading) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.arrow_upward, size: 12,
+                            color: cs.onSurface.withValues(alpha: 0.5)),
+                        const SizedBox(width: 3),
+                        Text(_formatSpeed(item.uploadSpeedBytesPerSec),
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: cs.onSurface.withValues(alpha: 0.6))),
+                        const SizedBox(width: 12),
+                        Icon(Icons.people, size: 12,
+                            color: cs.onSurface.withValues(alpha: 0.5)),
+                        const SizedBox(width: 3),
+                        Text('S: ${item.torrentSeeders} P: ${item.torrentPeers}',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: cs.onSurface.withValues(alpha: 0.6))),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 4),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -941,5 +963,16 @@ class _DownloadTabState extends State<DownloadTab> {
     }
 
     return '$speedStr \u00b7 $etaStr';
+  }
+
+  String _formatSpeed(double bytesPerSec) {
+    if (bytesPerSec <= 0) return '0 B/s';
+    if (bytesPerSec > 1024 * 1024) {
+      return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s up';
+    } else if (bytesPerSec > 1024) {
+      return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s up';
+    } else {
+      return '${bytesPerSec.toStringAsFixed(0)} B/s up';
+    }
   }
 }

@@ -8,6 +8,7 @@ import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
 import '../services/dio_client.dart';
 import '../services/haptic_service.dart';
+import '../services/torrent_download_service.dart';
 
 class NewDownloadSheet extends StatefulWidget {
   const NewDownloadSheet({super.key});
@@ -28,12 +29,23 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
   bool _resumeSupported = false;
   String _detectedFileName = '';
 
+  // Magnet-specific state
+  bool _isMagnet = false;
+  bool _fetchingMetadata = false;
+  TorrentMetaResult? _torrentMeta;
+  String? _magnetHash;
+  String? _magnetTrackers;
+  final Set<int> _selectedFileIndices = {};
 
   @override
   void dispose() {
     _urlController.dispose();
     _filenameController.dispose();
     super.dispose();
+  }
+
+  bool _isMagnetLink(String url) {
+    return url.trim().toLowerCase().startsWith('magnet:?');
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -44,6 +56,8 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
         setState(() {
           _infoFetched = false;
           _error = null;
+          _isMagnet = false;
+          _torrentMeta = null;
         });
       }
     }
@@ -51,12 +65,13 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
 
   String? _validateUrl(String url) {
     if (url.isEmpty) return 'Please enter a URL';
+    if (_isMagnetLink(url)) return null;
     final uri = Uri.tryParse(url);
     if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
       return 'Invalid URL format';
     }
     if (uri.scheme != 'http' && uri.scheme != 'https') {
-      return 'Only HTTP and HTTPS URLs are supported';
+      return 'Only HTTP, HTTPS, and magnet links are supported';
     }
     return null;
   }
@@ -155,6 +170,11 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
       return;
     }
 
+    if (_isMagnetLink(url)) {
+      await _handleMagnetLink(url);
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _error = null;
@@ -197,6 +217,93 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _handleMagnetLink(String url) async {
+    setState(() {
+      _fetchingMetadata = true;
+      _error = null;
+      _isMagnet = true;
+    });
+
+    try {
+      HapticService.medium();
+      final service = TorrentDownloadService();
+      final magnetInfo = service.parseMagnet(url);
+      _magnetHash = magnetInfo.hash;
+      _magnetTrackers = magnetInfo.trackers.join(', ');
+
+      final meta = await service.fetchMetadata(url);
+      if (!mounted) return;
+
+      setState(() {
+        _torrentMeta = meta;
+        _fetchingMetadata = false;
+        _detectedFileName = meta.name;
+        _filenameController.text = meta.name;
+        _selectedFileIndices.clear();
+        _selectedFileIndices.addAll(List.generate(meta.fileCount, (i) => i));
+      });
+
+      _showTorrentConfirmation();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to fetch torrent metadata: $e';
+          _fetchingMetadata = false;
+        });
+      }
+    }
+  }
+
+  void _showTorrentConfirmation() {
+    final meta = _torrentMeta;
+    if (meta == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _TorrentConfirmSheet(
+        meta: meta,
+        magnetHash: _magnetHash ?? '',
+        magnetTrackers: _magnetTrackers ?? '',
+        selectedIndices: _selectedFileIndices.toList(),
+        onSelectionChanged: (indices) {
+          _selectedFileIndices.clear();
+          _selectedFileIndices.addAll(indices);
+        },
+        onDownload: () => _startTorrentDownload(ctx),
+      ),
+    );
+  }
+
+  Future<void> _startTorrentDownload(BuildContext dialogContext) async {
+    final url = _urlController.text.trim();
+    final fileName = _filenameController.text.trim();
+    final meta = _torrentMeta;
+
+    if (!mounted) return;
+    final appState = context.read<AppState>();
+    final dlProvider = context.read<DownloadProvider>();
+
+    await dlProvider.addTorrentDownload(
+      url,
+      fileName,
+      appState.defaultSavePath,
+      torrentHash: _magnetHash,
+      torrentDisplayName: meta?.name,
+      torrentTrackers: _magnetTrackers,
+      selectedFileIndices: _selectedFileIndices.isNotEmpty ? _selectedFileIndices.toList() : null,
+    );
+
+    if (mounted) {
+      Navigator.pop(dialogContext);
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added torrent: $fileName')),
+      );
     }
   }
 
@@ -267,8 +374,8 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
             TextField(
               controller: _urlController,
               decoration: InputDecoration(
-                labelText: 'URL',
-                hintText: 'https://example.com/file.zip',
+                labelText: 'URL or Magnet Link',
+                hintText: 'https://... or magnet:?xt=...',
                 prefixIcon: const Icon(Icons.link),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -279,10 +386,12 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
               textInputAction: TextInputAction.next,
               autocorrect: false,
               onChanged: (_) {
-                if (_infoFetched) {
+                if (_infoFetched || _isMagnet) {
                   setState(() {
                     _infoFetched = false;
+                    _isMagnet = false;
                     _error = null;
+                    _torrentMeta = null;
                   });
                 }
               },
@@ -297,26 +406,32 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _filenameController,
-              decoration: InputDecoration(
-                labelText: 'Filename',
-                hintText: 'Auto-detected from URL',
-                prefixIcon: const Icon(Icons.description),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+            if (!_isMagnet) ...[
+              TextField(
+                controller: _filenameController,
+                decoration: InputDecoration(
+                  labelText: 'Filename',
+                  hintText: 'Auto-detected from URL',
+                  prefixIcon: const Icon(Icons.description),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
+                textInputAction: TextInputAction.next,
+                onChanged: (_) {
+                  if (_infoFetched) {
+                    setState(() => _infoFetched = false);
+                  }
+                },
               ),
-              textInputAction: TextInputAction.next,
-              onChanged: (_) {
-                if (_infoFetched) {
-                  setState(() => _infoFetched = false);
-                }
-              },
-            ),
-            if (_infoFetched) ...[
+            ],
+            if (_infoFetched && !_isMagnet) ...[
               const SizedBox(height: 16),
               _buildFileInfoCard(cs),
+            ],
+            if (_fetchingMetadata) ...[
+              const SizedBox(height: 16),
+              _buildMetadataLoading(cs),
             ],
             const SizedBox(height: 20),
             Row(
@@ -336,7 +451,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   flex: 2,
-                  child: _isLoading
+                  child: _isLoading || _fetchingMetadata
                       ? FilledButton.icon(
                           onPressed: null,
                           icon: const SizedBox(
@@ -345,7 +460,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white),
                           ),
-                          label: const Text('Fetching...'),
+                          label: Text(_fetchingMetadata ? 'Fetching Torrent...' : 'Fetching...'),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -353,9 +468,9 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
                             ),
                           ),
                         )
-                      : _infoFetched
+                      : _infoFetched || _isMagnet
                           ? FilledButton.icon(
-                              onPressed: _startDownload,
+                              onPressed: _isMagnet ? () => _startTorrentDownload(context) : _startDownload,
                               icon: const Icon(Icons.download_rounded),
                               label: const Text('Download'),
                               style: FilledButton.styleFrom(
@@ -384,6 +499,31 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildMetadataLoading(ColorScheme cs) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: cs.primary.withValues(alpha: 0.15),
+        ),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 12),
+          Text('Downloading torrent metadata...',
+              style: TextStyle(color: cs.onSurface, fontSize: 13)),
+        ],
       ),
     );
   }
@@ -449,5 +589,189 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
         ),
       ],
     );
+  }
+}
+
+class _TorrentConfirmSheet extends StatefulWidget {
+  final TorrentMetaResult meta;
+  final String magnetHash;
+  final String magnetTrackers;
+  final List<int> selectedIndices;
+  final void Function(List<int>) onSelectionChanged;
+  final VoidCallback onDownload;
+
+  const _TorrentConfirmSheet({
+    required this.meta,
+    required this.magnetHash,
+    required this.magnetTrackers,
+    required this.selectedIndices,
+    required this.onSelectionChanged,
+    required this.onDownload,
+  });
+
+  @override
+  State<_TorrentConfirmSheet> createState() => _TorrentConfirmSheetState();
+}
+
+class _TorrentConfirmSheetState extends State<_TorrentConfirmSheet> {
+  late List<bool> _selected;
+  bool _selectAll = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = List.generate(widget.meta.fileCount, (i) => widget.selectedIndices.contains(i));
+    _selectAll = _selected.every((s) => s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final meta = widget.meta;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
+      decoration: BoxDecoration(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        color: cs.surface.withValues(alpha: 0.97),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: cs.onSurface.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Torrent Details',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    )),
+            const SizedBox(height: 16),
+            _detailRow(Icons.movie, 'Name', meta.name, cs),
+            const SizedBox(height: 8),
+            _detailRow(Icons.storage, 'Total Size', _formatBytes(meta.totalSize), cs),
+            const SizedBox(height: 8),
+            _detailRow(Icons.description, 'Files', '${meta.fileCount} files', cs),
+            if (widget.magnetHash.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _detailRow(Icons.tag, 'Info Hash', widget.magnetHash.length > 16
+                  ? '${widget.magnetHash.substring(0, 16)}...'
+                  : widget.magnetHash, cs),
+            ],
+            if (widget.magnetTrackers.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _detailRow(Icons.dns, 'Trackers', meta.fileCount > 0
+                  ? '${widget.magnetTrackers.split(', ').length} trackers'
+                  : 'None', cs),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text('Files',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: cs.onSurface,
+                        fontSize: 15)),
+                const Spacer(),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _selectAll = !_selectAll;
+                      for (var i = 0; i < _selected.length; i++) {
+                        _selected[i] = _selectAll;
+                      }
+                      widget.onSelectionChanged(
+                        _selected.asMap().entries.where((e) => e.value).map((e) => e.key).toList(),
+                      );
+                    });
+                  },
+                  child: Text(_selectAll ? 'Deselect All' : 'Select All'),
+                ),
+              ],
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: meta.fileCount,
+                itemBuilder: (context, index) {
+                  return CheckboxListTile(
+                    dense: true,
+                    value: _selected[index],
+                    title: Text(meta.fileNames[index],
+                        style: const TextStyle(fontSize: 13),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    subtitle: Text(_formatBytes(meta.fileSizes[index]),
+                        style: TextStyle(fontSize: 11, color: cs.onSurface.withValues(alpha: 0.6))),
+                    onChanged: (val) {
+                      setState(() {
+                        _selected[index] = val ?? false;
+                        _selectAll = _selected.every((s) => s);
+                      });
+                      widget.onSelectionChanged(
+                        _selected.asMap().entries.where((e) => e.value).map((e) => e.key).toList(),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: widget.onDownload,
+              icon: const Icon(Icons.download_rounded),
+              label: Text('Download ${_selected.where((s) => s).length} Files'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.green,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(IconData icon, String label, String value, ColorScheme cs) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: cs.primary.withValues(alpha: 0.7)),
+        const SizedBox(width: 8),
+        Text('$label: ',
+            style: TextStyle(
+                color: cs.onSurface.withValues(alpha: 0.6),
+                fontSize: 13)),
+        Expanded(
+          child: Text(value,
+              style: TextStyle(
+                  color: cs.onSurface,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var i = (log(bytes) / log(1024)).floor();
+    return '${(bytes / pow(1024, i)).toStringAsFixed(1)} ${suffixes[i]}';
   }
 }

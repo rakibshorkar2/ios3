@@ -20,7 +20,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'dirxplore_downloads.db');
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -36,11 +36,19 @@ class DatabaseHelper {
         batchId TEXT,
         batchName TEXT,
         status INTEGER,
+        downloadType INTEGER DEFAULT 0,
         totalBytes INTEGER,
         downloadedBytes INTEGER,
         retryCount INTEGER,
         errorMessage TEXT,
-        addedAt TEXT
+        addedAt TEXT,
+        torrentHash TEXT,
+        torrentDisplayName TEXT,
+        torrentTrackers TEXT,
+        torrentSeeders INTEGER DEFAULT 0,
+        torrentPeers INTEGER DEFAULT 0,
+        uploadSpeedBytesPerSec REAL DEFAULT 0,
+        selectedFileIndices TEXT
       )
     ''');
     await _createTorrentsTable(db);
@@ -49,6 +57,16 @@ class DatabaseHelper {
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await _createTorrentsTable(db);
+    }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE downloads ADD COLUMN downloadType INTEGER DEFAULT 0');
+      await db.execute('ALTER TABLE downloads ADD COLUMN torrentHash TEXT');
+      await db.execute('ALTER TABLE downloads ADD COLUMN torrentDisplayName TEXT');
+      await db.execute('ALTER TABLE downloads ADD COLUMN torrentTrackers TEXT');
+      await db.execute('ALTER TABLE downloads ADD COLUMN torrentSeeders INTEGER DEFAULT 0');
+      await db.execute('ALTER TABLE downloads ADD COLUMN torrentPeers INTEGER DEFAULT 0');
+      await db.execute('ALTER TABLE downloads ADD COLUMN uploadSpeedBytesPerSec REAL DEFAULT 0');
+      await db.execute('ALTER TABLE downloads ADD COLUMN selectedFileIndices TEXT');
     }
   }
 

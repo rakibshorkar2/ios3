@@ -80,6 +80,15 @@ void main() async {
   await dlProvider.init();
   dlProvider.setMaxConcurrent(appState.maxConcurrentDownloads);
   dlProvider.onAllDownloadsComplete = () => appState.notifyDownloadsComplete();
+  // Sync proxy settings for torrent downloads
+  final activeProxy = proxyProvider.activeProxy;
+  dlProvider.setTorrentProxySettings(
+    appState.useProxyForTorrents && activeProxy != null,
+    host: activeProxy?.host,
+    port: activeProxy?.port,
+    username: activeProxy?.username,
+    password: activeProxy?.password,
+  );
 
   final torrentProvider = TorrentProvider();
   await torrentProvider.init();
