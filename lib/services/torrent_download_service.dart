@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:dtorrent_task_v2/dtorrent_task_v2.dart';
 import '../models/download_item.dart';
 
-
 class MagnetInfo {
   final String hash;
   final String? displayName;
@@ -105,6 +104,7 @@ class TorrentDownloadService {
     final displayName = dnMatch != null ? Uri.decodeComponent(dnMatch.group(1)!) : null;
     final trMatches = RegExp(r'tr=([^&]+)').allMatches(magnet);
     final trackers = trMatches.map((m) => Uri.decodeComponent(m.group(1)!)).toList();
+    debugPrint('[TorrentDownloadService] Parsed magnet: hash=$hash displayName=$displayName trackers=${trackers.length}');
     return MagnetInfo(
       hash: hash,
       displayName: displayName ?? magnetData.infoHashString,
@@ -112,42 +112,130 @@ class TorrentDownloadService {
     );
   }
 
-  Future<TorrentMetaResult> fetchMetadata(String magnet) async {
+  Future<TorrentMetaResult> fetchMetadata(
+    String magnet, {
+    void Function(String status)? onStatus,
+  }) async {
+    const int maxRetries = 3;
+    const Duration perAttemptTimeout = Duration(seconds: 120);
+    String? lastError;
+
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      debugPrint('[TorrentDownloadService] Metadata attempt $attempt/$maxRetries');
+      onStatus?.call('Initializing torrent engine (attempt $attempt/$maxRetries)...');
+
+      try {
+        final result = await _fetchMetadataSingle(magnet,
+            onStatus: onStatus, timeout: perAttemptTimeout);
+
+        debugPrint('[TorrentDownloadService] Metadata fetch succeeded on attempt $attempt');
+        _metadataCache[magnet] = result.metadata;
+        return result;
+      } catch (e) {
+        lastError = e.toString();
+        debugPrint('[TorrentDownloadService] Metadata attempt $attempt failed: $e');
+
+        if (attempt < maxRetries) {
+          final wait = attempt * 3;
+          debugPrint('[TorrentDownloadService] Waiting ${wait}s before retry...');
+          onStatus?.call('Retrying in ${wait}s (attempt $attempt/$maxRetries)...');
+          await Future.delayed(Duration(seconds: wait));
+        }
+      }
+    }
+
+    debugPrint('[TorrentDownloadService] All $maxRetries metadata attempts failed');
+    final friendly = _friendlyError(lastError);
+    throw TorrentMetadataException(friendly);
+  }
+
+  Future<TorrentMetaResult> _fetchMetadataSingle(
+    String magnet, {
+    void Function(String status)? onStatus,
+    required Duration timeout,
+  }) async {
     final metadataDownloader = MetadataDownloader.fromMagnet(magnet);
     final completer = Completer<Uint8List>();
+    final statusTimer = _startStatusSimulator(onStatus);
 
     metadataDownloader.events.on<MetaDataDownloadComplete>((event) {
+      debugPrint('[TorrentDownloadService] MetaDataDownloadComplete received: ${event.data.length} bytes');
       if (!completer.isCompleted) {
         completer.complete(Uint8List.fromList(event.data));
       }
     });
+
     metadataDownloader.events.on<MetaDataDownloadFailed>((event) {
+      debugPrint('[TorrentDownloadService] MetaDataDownloadFailed: ${event.error}');
       if (!completer.isCompleted) {
         completer.completeError(event.error);
       }
     });
 
-    await metadataDownloader.startDownload();
-    final data = await completer.future.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => throw TimeoutException('Metadata fetch timed out'),
-    );
+    try {
+      debugPrint('[TorrentDownloadService] Starting MetadataDownloader...');
+      onStatus?.call('Connecting to DHT...');
+      await metadataDownloader.startDownload();
 
-    final model = TorrentParser.parseBytes(data);
-    final fileNames = model.files.map((f) => f.name).toList();
-    final fileSizes = model.files.map((f) => f.length).toList();
-    final totalSize = model.files.fold<int>(0, (sum, f) => sum + f.length);
+      onStatus?.call('Contacting trackers...');
+      debugPrint('[TorrentDownloadService] Waiting for metadata (timeout: ${timeout.inSeconds}s)...');
+      final data = await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          debugPrint('[TorrentDownloadService] Timeout reached after ${timeout.inSeconds}s');
+          metadataDownloader.stop();
+          throw TimeoutException('No peers found. Metadata download timed out after ${timeout.inSeconds} seconds.');
+        },
+      );
 
-    _metadataCache[magnet] = data;
+      final model = TorrentParser.parseBytes(data);
+      final fileNames = model.files.map((f) => f.name).toList();
+      final fileSizes = model.files.map((f) => f.length).toList();
+      final totalSize = model.files.fold<int>(0, (sum, f) => sum + f.length);
 
-    return TorrentMetaResult(
-      name: model.name,
-      totalSize: totalSize,
-      fileCount: model.files.length,
-      fileNames: fileNames,
-      fileSizes: fileSizes,
-      metadata: data,
-    );
+      debugPrint('[TorrentDownloadService] Metadata parsed: name="${model.name}" files=${model.files.length} totalSize=$totalSize');
+
+      return TorrentMetaResult(
+        name: model.name,
+        totalSize: totalSize,
+        fileCount: model.files.length,
+        fileNames: fileNames,
+        fileSizes: fileSizes,
+        metadata: data,
+      );
+    } finally {
+      statusTimer.cancel();
+    }
+  }
+
+  Timer _startStatusSimulator(void Function(String status)? onStatus) {
+    const messages = [
+      'Connecting to DHT...',
+      'Contacting trackers...',
+      'Searching for peers...',
+      'Downloading metadata...',
+    ];
+    int index = 0;
+    onStatus?.call(messages[0]);
+    return Timer.periodic(const Duration(seconds: 5), (timer) {
+      index = (index + 1) % messages.length;
+      onStatus?.call(messages[index]);
+    });
+  }
+
+  String _friendlyError(String? raw) {
+    if (raw == null) return 'Failed to fetch torrent metadata.';
+    final lower = raw.toLowerCase();
+    if (lower.contains('timeout') || lower.contains('timed out')) {
+      return 'No peers found. Please try again later or use another magnet link.';
+    }
+    if (lower.contains('dht') || lower.contains('tracker')) {
+      return 'Could not reach the torrent network. Check your internet connection and proxy settings.';
+    }
+    if (lower.contains('invalid') || lower.contains('parse') || lower.contains('format')) {
+      return 'The magnet link appears to be invalid. Please check and try again.';
+    }
+    return 'Failed to fetch torrent metadata: ${raw.length > 100 ? raw.substring(0, 100) : raw}';
   }
 
   Uint8List? getCachedMetadata(String magnet) => _metadataCache[magnet];
@@ -282,4 +370,12 @@ class TorrentDownloadService {
     _completionListeners.clear();
     _errorListeners.clear();
   }
+}
+
+class TorrentMetadataException implements Exception {
+  final String message;
+  TorrentMetadataException(this.message);
+
+  @override
+  String toString() => message;
 }

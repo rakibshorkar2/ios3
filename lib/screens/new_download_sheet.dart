@@ -32,6 +32,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
   // Magnet-specific state
   bool _isMagnet = false;
   bool _fetchingMetadata = false;
+  String _metadataStatus = '';
   TorrentMetaResult? _torrentMeta;
   String? _magnetHash;
   String? _magnetTrackers;
@@ -58,6 +59,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
           _error = null;
           _isMagnet = false;
           _torrentMeta = null;
+          _metadataStatus = '';
         });
       }
     }
@@ -225,6 +227,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
       _fetchingMetadata = true;
       _error = null;
       _isMagnet = true;
+      _metadataStatus = 'Initializing torrent engine...';
     });
 
     try {
@@ -234,7 +237,11 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
       _magnetHash = magnetInfo.hash;
       _magnetTrackers = magnetInfo.trackers.join(', ');
 
-      final meta = await service.fetchMetadata(url);
+      final meta = await service.fetchMetadata(url, onStatus: (status) {
+        if (mounted) {
+          setState(() => _metadataStatus = status);
+        }
+      });
       if (!mounted) return;
 
       setState(() {
@@ -247,10 +254,17 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
       });
 
       _showTorrentConfirmation();
+    } on TorrentMetadataException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _fetchingMetadata = false;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to fetch torrent metadata: $e';
+          _error = 'Failed to fetch torrent metadata: ${e.toString().length > 200 ? e.toString().substring(0, 200) : e}';
           _fetchingMetadata = false;
         });
       }
@@ -392,6 +406,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
                     _isMagnet = false;
                     _error = null;
                     _torrentMeta = null;
+                    _metadataStatus = '';
                   });
                 }
               },
@@ -521,8 +536,13 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
           const SizedBox(width: 12),
-          Text('Downloading torrent metadata...',
-              style: TextStyle(color: cs.onSurface, fontSize: 13)),
+          Expanded(
+            child: Text(
+              _metadataStatus.isNotEmpty ? _metadataStatus : 'Downloading torrent metadata...',
+              style: TextStyle(color: cs.onSurface, fontSize: 13),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
