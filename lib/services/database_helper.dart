@@ -20,7 +20,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'dirxplore_downloads.db');
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -48,7 +48,8 @@ class DatabaseHelper {
         torrentSeeders INTEGER DEFAULT 0,
         torrentPeers INTEGER DEFAULT 0,
         uploadSpeedBytesPerSec REAL DEFAULT 0,
-        selectedFileIndices TEXT
+        selectedFileIndices TEXT,
+        isSequential INTEGER DEFAULT 0
       )
     ''');
     await _createTorrentsTable(db);
@@ -67,6 +68,9 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE downloads ADD COLUMN torrentPeers INTEGER DEFAULT 0');
       await db.execute('ALTER TABLE downloads ADD COLUMN uploadSpeedBytesPerSec REAL DEFAULT 0');
       await db.execute('ALTER TABLE downloads ADD COLUMN selectedFileIndices TEXT');
+    }
+    if (oldVersion < 4) {
+      await db.execute('ALTER TABLE downloads ADD COLUMN isSequential INTEGER DEFAULT 0');
     }
   }
 

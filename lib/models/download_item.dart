@@ -29,6 +29,7 @@ class DownloadItem {
   int torrentPeers;
   double uploadSpeedBytesPerSec;
   List<int> selectedFileIndices;
+  bool isSequential;
 
   DownloadItem({
     required this.id,
@@ -52,6 +53,7 @@ class DownloadItem {
     this.torrentPeers = 0,
     this.uploadSpeedBytesPerSec = 0,
     this.selectedFileIndices = const [],
+    this.isSequential = false,
     DateTime? addedAt,
   }) : addedAt = addedAt ?? DateTime.now();
 
@@ -91,6 +93,7 @@ class DownloadItem {
     int? torrentPeers,
     double? uploadSpeedBytesPerSec,
     List<int>? selectedFileIndices,
+    bool? isSequential,
   }) =>
       DownloadItem(
         id: id,
@@ -114,6 +117,7 @@ class DownloadItem {
         torrentPeers: torrentPeers ?? this.torrentPeers,
         uploadSpeedBytesPerSec: uploadSpeedBytesPerSec ?? this.uploadSpeedBytesPerSec,
         selectedFileIndices: selectedFileIndices ?? this.selectedFileIndices,
+        isSequential: isSequential ?? this.isSequential,
         addedAt: addedAt,
       );
 
@@ -138,6 +142,7 @@ class DownloadItem {
     'torrentPeers': torrentPeers,
     'uploadSpeedBytesPerSec': uploadSpeedBytesPerSec,
     'selectedFileIndices': selectedFileIndices.join(','),
+    'isSequential': isSequential ? 1 : 0,
   };
 
   factory DownloadItem.fromJson(Map<String, dynamic> json) {
@@ -167,6 +172,7 @@ class DownloadItem {
       selectedFileIndices: selStr != null && selStr.isNotEmpty
           ? selStr.split(',').map((e) => int.tryParse(e) ?? 0).toList()
           : [],
+      isSequential: (json['isSequential'] ?? 0) == 1,
     );
   }
 }

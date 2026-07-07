@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
@@ -232,7 +233,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
 
     try {
       HapticService.medium();
-      final service = TorrentDownloadService();
+      final service = TorrentEngineService();
       final magnetInfo = service.parseMagnet(url);
       _magnetHash = magnetInfo.hash;
       _magnetTrackers = magnetInfo.trackers.join(', ');
@@ -271,9 +272,13 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
     }
   }
 
+  bool _isSequential = false;
+
   void _showTorrentConfirmation() {
     final meta = _torrentMeta;
     if (meta == null) return;
+
+    _isSequential = _isMediaTorrent(meta);
 
     showModalBottomSheet(
       context: context,
@@ -284,13 +289,23 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
         magnetHash: _magnetHash ?? '',
         magnetTrackers: _magnetTrackers ?? '',
         selectedIndices: _selectedFileIndices.toList(),
+        isSequential: _isSequential,
         onSelectionChanged: (indices) {
           _selectedFileIndices.clear();
           _selectedFileIndices.addAll(indices);
         },
+        onSequentialChanged: (val) => _isSequential = val,
         onDownload: () => _startTorrentDownload(ctx),
       ),
     );
+  }
+
+  bool _isMediaTorrent(TorrentMetaResult meta) {
+    const videoExts = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v'];
+    return meta.fileNames.any((f) {
+      final ext = f.split('.').last.toLowerCase();
+      return videoExts.contains(ext);
+    });
   }
 
   Future<void> _startTorrentDownload(BuildContext dialogContext) async {
@@ -310,6 +325,7 @@ class _NewDownloadSheetState extends State<NewDownloadSheet> {
       torrentDisplayName: meta?.name,
       torrentTrackers: _magnetTrackers,
       selectedFileIndices: _selectedFileIndices.isNotEmpty ? _selectedFileIndices.toList() : null,
+      isSequential: _isSequential,
     );
 
     if (mounted) {
@@ -617,7 +633,9 @@ class _TorrentConfirmSheet extends StatefulWidget {
   final String magnetHash;
   final String magnetTrackers;
   final List<int> selectedIndices;
+  final bool isSequential;
   final void Function(List<int>) onSelectionChanged;
+  final void Function(bool) onSequentialChanged;
   final VoidCallback onDownload;
 
   const _TorrentConfirmSheet({
@@ -625,7 +643,9 @@ class _TorrentConfirmSheet extends StatefulWidget {
     required this.magnetHash,
     required this.magnetTrackers,
     required this.selectedIndices,
+    required this.isSequential,
     required this.onSelectionChanged,
+    required this.onSequentialChanged,
     required this.onDownload,
   });
 
@@ -636,12 +656,14 @@ class _TorrentConfirmSheet extends StatefulWidget {
 class _TorrentConfirmSheetState extends State<_TorrentConfirmSheet> {
   late List<bool> _selected;
   bool _selectAll = true;
+  late bool _isSequential;
 
   @override
   void initState() {
     super.initState();
     _selected = List.generate(widget.meta.fileCount, (i) => widget.selectedIndices.contains(i));
     _selectAll = _selected.every((s) => s);
+    _isSequential = widget.isSequential;
   }
 
   @override
@@ -696,7 +718,32 @@ class _TorrentConfirmSheetState extends State<_TorrentConfirmSheet> {
                   ? '${widget.magnetTrackers.split(', ').length} trackers'
                   : 'None', cs),
             ],
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                color: cs.primaryContainer.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 8),
+                  Icon(Icons.sort, size: 18, color: cs.primary),
+                  const SizedBox(width: 8),
+                  Text('Sequential Download',
+                      style: TextStyle(fontSize: 13, color: cs.onSurface)),
+                  const Spacer(),
+                  CupertinoSwitch(
+                    value: _isSequential,
+                    onChanged: (val) {
+                      setState(() => _isSequential = val);
+                      widget.onSequentialChanged(val);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Text('Files',
