@@ -3,7 +3,7 @@ Pod::Spec.new do |s|
   s.version          = '0.2.3'
   s.summary          = 'Prebuilt libtorrent XCFramework for iOS'
   s.homepage         = 'https://github.com/tryAGI/LibtorrentSDK'
-  s.license          = { :type => 'BSD', :file => '../LICENSE' }
+  s.license          = { :type => 'BSD' }
   s.author           = { 'tryAGI' => 'info@tryagi.com' }
   s.source           = { :path => '.' }
   s.platform         = :ios, '16.1'
