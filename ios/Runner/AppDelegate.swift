@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import UserNotifications
+import TorrentBridge
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {

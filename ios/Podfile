@@ -44,6 +44,9 @@ target 'Runner' do
     Pod::UI.puts 'LibtorrentNative.xcframework not found, skipping pod (will be downloaded in CI)'
   end
   pod 'LibtorrentNative', :path => '.'
+
+  # TorrentBridge native source code
+  pod 'TorrentBridge', :path => '.'
 end
 
 post_install do |installer|
