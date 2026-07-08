@@ -22,7 +22,9 @@ final class TorrentManager {
     private var _eventSink: FlutterEventSink?
     private var isInitialized = false
 
-    private init() {}
+    private init() {
+        debugPrint("[TorrentManager] Singleton created — engine NOT initialized, no native code loaded")
+    }
 
     func setEventSink(_ sink: FlutterEventSink?) {
         os_unfair_lock_lock(&eventSinkLock)

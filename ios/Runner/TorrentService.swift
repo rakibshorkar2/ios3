@@ -8,12 +8,17 @@ public final class TorrentService: NSObject, FlutterPlugin {
     private var eventSink: FlutterEventSink?
 
     public static func register(with registrar: FlutterPluginRegistrar) {
+        debugPrint("[TorrentService] register() called — setting up MethodChannel/EventChannel")
+
         let method = FlutterMethodChannel(name: methodChannel, binaryMessenger: registrar.messenger())
         let events = FlutterEventChannel(name: eventChannel, binaryMessenger: registrar.messenger())
 
         let instance = TorrentService()
         registrar.addMethodCallDelegate(instance, channel: method)
         events.setStreamHandler(instance)
+
+        debugPrint("[TorrentService] register() complete — channels ready, engine NOT initialized")
+        debugPrint("[TorrentService] Framework available: \(TorrentCppWrapper.isFrameworkAvailable())")
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
