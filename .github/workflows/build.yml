@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  FLUTTER_VERSION: '3.24'
+  FLUTTER_VERSION: '3.32'
   LIBTORRENT_SDK_VERSION: '0.2.3'
 
 jobs:
