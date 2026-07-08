@@ -199,7 +199,7 @@ class OpenDirApp extends StatelessWidget {
         return MaterialApp(
           title: 'DirXplore',
           themeMode: appState.themeMode,
-          theme: ThemeData.light(useMaterial3: true).copyWith(
+          theme: ThemeData.light().copyWith(
             colorScheme: lightScheme,
             cupertinoOverrideTheme: const CupertinoThemeData(
               textTheme: CupertinoTextThemeData(
@@ -207,7 +207,7 @@ class OpenDirApp extends StatelessWidget {
               ),
             ),
           ),
-          darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+          darkTheme: ThemeData.dark().copyWith(
             colorScheme: darkScheme,
             cupertinoOverrideTheme: const CupertinoThemeData(
               brightness: Brightness.dark,
