@@ -11,7 +11,5 @@ Pod::Spec.new do |s|
   s.source_files     = 'Runner/TorrentService.swift', 'Runner/TorrentManager.swift', 'Runner/TorrentCppWrapper.mm', 'Runner/TorrentCppWrapper.h', 'Runner/LibtorrentNative.h'
   s.public_header_files = 'Runner/TorrentCppWrapper.h'
   s.dependency 'Flutter'
-  s.pod_target_xcconfig = {
-    'OTHER_LDFLAGS' => '$(inherited) -weak_framework LibtorrentNative',
-  }
+  s.dependency 'LibtorrentNative'
 end

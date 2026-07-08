@@ -44,27 +44,19 @@ jobs:
           set -euo pipefail
           XCFW="ios/Frameworks/LibtorrentNative.xcframework"
 
-          # Check top-level Info.plist exists
           if [ ! -f "$XCFW/Info.plist" ]; then
             echo "::error::XCFramework Info.plist not found at $XCFW/Info.plist"
-            echo "The downloaded archive may be corrupt or not a valid XCFramework."
             exit 1
           fi
 
-          # Check for ios-arm64 device slice directory
           DEVICE_SLICE="$XCFW/ios-arm64"
           if [ ! -d "$DEVICE_SLICE" ]; then
             echo "::error::Missing ios-arm64 device slice!"
-            echo "Expected directory: $DEVICE_SLICE"
             echo "Found slices:"
             ls -d "$XCFW"/*/
-            echo ""
-            echo "This XCFramework does not contain an iOS device slice."
-            echo "It will build for the simulator but FAIL at runtime on real iPhones."
             exit 1
           fi
 
-          # Verify the device framework binary exists and has arm64
           DEVICE_BINARY="$DEVICE_SLICE/LibtorrentNative.framework/LibtorrentNative"
           if [ ! -f "$DEVICE_BINARY" ]; then
             echo "::error::Device framework binary not found at $DEVICE_BINARY"
@@ -72,7 +64,6 @@ jobs:
             exit 1
           fi
 
-          # Use lipo to confirm architecture
           ARCHS=$(xcrun lipo -info "$DEVICE_BINARY" 2>/dev/null | grep -o "arm64" | head -1 || true)
           if [ "$ARCHS" != "arm64" ]; then
             echo "::error::Device binary missing arm64 architecture!"
@@ -81,7 +72,6 @@ jobs:
           fi
           echo "✓ Device slice ($DEVICE_SLICE) confirmed: $(xcrun lipo -info "$DEVICE_BINARY" | sed 's/.*: //')"
 
-          # Check for simulator slice (warn, but don't fail)
           SIM_SLICE="$XCFW/ios-arm64_x86_64-simulator"
           if [ -d "$SIM_SLICE" ]; then
             SIM_BINARY="$SIM_SLICE/LibtorrentNative.framework/LibtorrentNative"
@@ -106,13 +96,63 @@ jobs:
         run: |
           flutter build ios --release --no-codesign
 
+      - name: Verify and fix framework embedding in .app
+        run: |
+          set -euo pipefail
+          APP_BUNDLE="build/ios/iphoneos/Runner.app"
+          FW_DEST="$APP_BUNDLE/Frameworks/LibtorrentNative.framework"
+          echo "::group::Checking framework embedding in .app bundle"
+
+          if [ -d "$FW_DEST" ]; then
+            echo "✓ CocoaPods embedded LibtorrentNative.framework at $FW_DEST"
+            echo "Framework contents:"
+            ls -la "$FW_DEST/"
+            xcrun lipo -info "$FW_DEST/LibtorrentNative" 2>/dev/null || echo "  (lipo check skipped)"
+          else
+            echo "⚠ CocoaPods did NOT embed LibtorrentNative.framework — manually copying"
+            echo "App Frameworks directory contents:"
+            ls -la "$APP_BUNDLE/Frameworks/" 2>/dev/null || echo "  (no Frameworks directory exists)"
+
+            mkdir -p "$APP_BUNDLE/Frameworks"
+            cp -R "ios/Frameworks/LibtorrentNative.xcframework/ios-arm64/LibtorrentNative.framework" "$APP_BUNDLE/Frameworks/"
+            echo "Framework manually copied to $FW_DEST"
+          fi
+
+          echo "::endgroup::"
+
+      - name: Verify framework in .app
+        run: |
+          set -euo pipefail
+          FW_PATH="build/ios/iphoneos/Runner.app/Frameworks/LibtorrentNative.framework"
+          if [ ! -d "$FW_PATH" ]; then
+            echo "::error::LibtorrentNative.framework is MISSING from Runner.app after all fixes!"
+            exit 1
+          fi
+          echo "✓ LibtorrentNative.framework present in Runner.app"
+          xcrun lipo -info "$FW_PATH/LibtorrentNative" 2>/dev/null || echo "  (lipo info unavailable)"
+
       - name: Export IPA
         run: |
+          set -euo pipefail
+          APP_BUNDLE="build/ios/iphoneos/Runner.app"
           mkdir -p build/ipa/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ipa/Payload/
+          cp -R "$APP_BUNDLE" build/ipa/Payload/
           cd build/ipa
           zip -r ../dirxplore.ipa Payload
-          ls -lh ../dirxplore.ipa
+          echo "IPA created: $(ls -lh ../dirxplore.ipa | awk '{print $5}')"
+
+      - name: Validate IPA contains framework
+        run: |
+          set -euo pipefail
+          echo "::group::Validating IPA contents"
+          unzip -l build/dirxplore.ipa | grep -E "Frameworks/LibtorrentNative" || {
+            echo "::error::LibtorrentNative.framework NOT found in IPA!"
+            echo "IPA contents (Frameworks):"
+            unzip -l build/dirxplore.ipa | grep "Frameworks/" || echo "  (no Frameworks in IPA at all)"
+            exit 1
+          }
+          echo "✓ LibtorrentNative.framework confirmed inside IPA"
+          echo "::endgroup::"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
