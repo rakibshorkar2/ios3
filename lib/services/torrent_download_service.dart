@@ -42,19 +42,59 @@ class TorrentEngineService {
   final Map<String, Uint8List> _metadataCache = {};
   final TorrentRepository _repo = TorrentRepository();
 
-  // Proxy settings stored for future native engine integration
-  // ignore: unused_field
+  // Proxy settings wired via ProxyConfig to TorrentTask.newTask()
   bool _proxyEnabled = false;
-  // ignore: unused_field
   String? _proxyHost;
-  // ignore: unused_field
   int? _proxyPort;
+  String? _proxyUser;
+  String? _proxyPass;
 
   void setProxySettings({required String host, required int port, String? username, String? password}) {
     _proxyEnabled = true;
     _proxyHost = host;
     _proxyPort = port;
+    _proxyUser = username;
+    _proxyPass = password;
   }
+
+  void clearProxySettings() {
+    _proxyEnabled = false;
+    _proxyHost = null;
+    _proxyPort = null;
+    _proxyUser = null;
+    _proxyPass = null;
+  }
+
+  ProxyConfig? _buildProxyConfig() {
+    if (!_proxyEnabled || _proxyHost == null) return null;
+    return ProxyConfig.socks5(
+      host: _proxyHost!,
+      port: _proxyPort ?? 1080,
+      username: _proxyUser,
+      password: _proxyPass,
+    );
+  }
+
+  // Well-known DHT bootstrap nodes
+  static final List<Uri> _defaultDHTNodes = [
+    Uri.parse('udp://router.bittorrent.com:6881'),
+    Uri.parse('udp://dht.transmissionbt.com:6881'),
+    Uri.parse('udp://dht.aelitis.com:6881'),
+    Uri.parse('udp://dht.iknow.com:6881'),
+    Uri.parse('udp://opentor.org:2710'),
+  ];
+
+  // Public trackers used as fallback when magnet has none
+  static final List<Uri> _fallbackTrackers = [
+    Uri.parse('udp://tracker.opentrackr.org:1337/announce'),
+    Uri.parse('udp://tracker.torrent.eu.org:451/announce'),
+    Uri.parse('udp://open.tracker.cl:1337/announce'),
+    Uri.parse('udp://tracker.moeking.me:6969/announce'),
+    Uri.parse('https://tracker.tamersunion.org:443/announce'),
+    Uri.parse('udp://explodie.org:6969/announce'),
+    Uri.parse('udp://tracker.dler.org:6969/announce'),
+    Uri.parse('udp://tracker.leechers-paradise.org:6969/announce'),
+  ];
 
   MagnetInfo parseMagnet(String magnet) {
     final magnetData = MagnetParser.parse(magnet);
@@ -83,7 +123,7 @@ class TorrentEngineService {
         lastError = e.toString();
         debugPrint('[TorrentEngine] Attempt $attempt failed: $e');
         if (attempt < maxRetries) {
-          final wait = attempt * 3;
+          final wait = 3 + attempt * 3;
           onStatus?.call('Retrying in ${wait}s (attempt $attempt/$maxRetries)...');
           await Future.delayed(Duration(seconds: wait));
         }
@@ -95,8 +135,9 @@ class TorrentEngineService {
   Future<TorrentMetaResult> _fetchSingle(String magnet,
       {required Duration timeout, void Function(String)? onStatus}) async {
     final downloader = MetadataDownloader.fromMagnet(magnet);
+
     final completer = Completer<Uint8List>();
-    final statusTimer = _statusTimer(onStatus);
+    onStatus?.call('Connecting to peers and fetching metadata...');
 
     downloader.events.on<MetaDataDownloadComplete>((event) {
       debugPrint('[TorrentEngine] Metadata received: ${event.data.length} bytes');
@@ -108,9 +149,7 @@ class TorrentEngineService {
     });
 
     try {
-      onStatus?.call('Connecting to DHT...');
       await downloader.startDownload();
-      onStatus?.call('Contacting trackers...');
       final data = await completer.future.timeout(timeout, onTimeout: () {
         downloader.stop();
         throw TimeoutException('No peers found after ${timeout.inSeconds}s');
@@ -127,27 +166,7 @@ class TorrentEngineService {
         metadata: data,
       );
     } finally {
-      statusTimer.cancel();
     }
-  }
-
-  Timer _statusTimer(void Function(String)? cb) {
-    const msgs = ['Connecting to DHT...', 'Contacting trackers...', 'Searching for peers...', 'Downloading metadata...'];
-    int i = 0;
-    cb?.call(msgs[0]);
-    return Timer.periodic(const Duration(seconds: 5), (_) {
-      i = (i + 1) % msgs.length;
-      cb?.call(msgs[i]);
-    });
-  }
-
-  String _friendlyError(String? raw) {
-    if (raw == null) return 'Failed to fetch torrent metadata.';
-    final lower = raw.toLowerCase();
-    if (lower.contains('timeout')) return 'No peers found. Please try again later or use another magnet link.';
-    if (lower.contains('dht') || lower.contains('tracker')) return 'Could not reach the torrent network.';
-    if (lower.contains('invalid') || lower.contains('parse')) return 'The magnet link appears to be invalid.';
-    return raw.length > 120 ? raw.substring(0, 120) : raw;
   }
 
   Uint8List? getCachedMetadata(String magnet) => _metadataCache[magnet];
@@ -155,9 +174,7 @@ class TorrentEngineService {
   Stream<TorrentTaskModel> startTask(DownloadItem item, {bool isSequential = false, Uint8List? metadata}) {
     final controller = StreamController<TorrentTaskModel>.broadcast();
     _controllers[item.id] = controller;
-
     _startTaskInner(item, controller, isSequential: isSequential, metadata: metadata);
-
     return controller.stream;
   }
 
@@ -169,37 +186,144 @@ class TorrentEngineService {
           (await fetchMetadata(magnet).then((r) => r.metadata));
 
       final model = TorrentParser.parseBytes(metaBytes);
-      final task = TorrentTask.newTask(model, item.savePath, isSequential);
+
+      // Build SequentialConfig with proper buffer sizing
+      final SequentialConfig? seqConfig = isSequential
+          ? SequentialConfig.forVideoStreaming()
+          : null;
+
+      // Gather web seeds and acceptable sources from magnet
+      final magnetData = MagnetParser.parse(magnet);
+      final webSeeds = magnetData?.webSeeds;
+      final acceptableSources = magnetData?.acceptableSources;
+
+      // Build tracker list: magnet's announces + fallback publics
+      final allTrackers = <Uri>{};
+      allTrackers.addAll(model.announces);
+      allTrackers.addAll(_fallbackTrackers);
+      // Add any trackers from magnet that aren't in announces
+      if (magnetData != null) {
+        for (final tr in magnetData.trackers) {
+          allTrackers.add(tr);
+        }
+      }
+
+      // Build a mock TorrentModel with all trackers merged
+      // (TorrentTask.newTask uses model.announces, so we need to re-create)
+      final enrichedModel = TorrentModel(
+        name: model.name,
+        files: model.files,
+        infoHashBuffer: model.infoHashBuffer,
+        pieceLength: model.pieceLength,
+        pieces: model.pieces,
+        announces: allTrackers.toList(),
+        nodes: [..._defaultDHTNodes, ...model.nodes],
+        length: model.length,
+        version: model.version,
+        metaVersion: model.metaVersion,
+        fileTree: model.fileTree,
+        pieceLayers: model.pieceLayers,
+        rootHash: model.rootHash,
+        infoDictBytes: model.infoDictBytes,
+        rawData: model.rawData,
+      );
+
+      final task = TorrentTask.newTask(
+        enrichedModel,
+        item.savePath,
+        isSequential,
+        webSeeds,
+        acceptableSources,
+        seqConfig,
+        _buildProxyConfig(),
+      );
       _tasks[item.id] = task;
+
+      final total = enrichedModel.files.fold<int>(0, (s, f) => s + f.length);
 
       final taskModel = TorrentTaskModel(
         id: item.id,
         magnetLink: magnet,
         savePath: item.savePath,
-        name: model.name,
-        infoHash: item.torrentHash ?? '',
+        name: enrichedModel.name,
+        infoHash: item.torrentHash ?? enrichedModel.infoHash,
         state: TorrentTaskState.downloading,
-        totalBytes: model.files.fold<int>(0, (s, f) => s + f.length),
-        trackers: item.torrentTrackers?.split(', ').where((t) => t.isNotEmpty).toList() ?? [],
+        totalBytes: total,
+        trackers: allTrackers.map((u) => u.toString()).toList(),
         selectedFileIndices: item.selectedFileIndices,
         isSequential: isSequential,
         metadataBytes: metaBytes,
+        totalPieces: enrichedModel.pieces?.length ?? 0,
       );
       await _repo.insert(taskModel);
 
+      // -- Wire events --
+
+      task.events.on<TaskFileCompleted>((event) {
+        final fileName = event.file.originalFileName;
+        debugPrint('[TorrentEngine] File completed: $fileName');
+        taskModel.filesCompleted.add(fileName);
+      });
+
+      task.events.on<StateFileUpdated>((_) async {
+        await _repo.update(taskModel);
+      });
+
+      task.events.on<TaskPaused>((_) async {
+        taskModel.state = TorrentTaskState.paused;
+        await _repo.update(taskModel);
+        controller.add(taskModel);
+      });
+
+      task.events.on<TaskResumed>((_) async {
+        taskModel.state = TorrentTaskState.downloading;
+        controller.add(taskModel);
+      });
+
+      task.events.on<TaskStopped>((_) async {
+        taskModel.state = TorrentTaskState.error;
+        controller.add(taskModel);
+      });
+
       task.events.on<TaskCompleted>((_) async {
-        taskModel.state = TorrentTaskState.completed;
+        taskModel.state = TorrentTaskState.seeding;
         taskModel.progress = 1.0;
         taskModel.downloadSpeed = 0;
         taskModel.uploadSpeed = 0;
+        taskModel.seeders = task.seederNumber;
+        taskModel.peers = task.connectedPeersNumber;
         await _repo.update(taskModel);
         controller.add(taskModel);
+
+        // Transition to completed after a brief seeding period
+        taskModel.state = TorrentTaskState.completed;
+        await _repo.update(taskModel);
+        controller.add(taskModel);
+
         await Future.delayed(const Duration(milliseconds: 500));
         await controller.close();
         _controllers.remove(item.id);
       });
 
+      // Apply file selection and auto-prioritize
+      if (item.selectedFileIndices.isNotEmpty) {
+        task.applySelectedFiles(item.selectedFileIndices);
+      }
+      task.autoPrioritizeFiles();
+
+      // Add DHT bootstrap nodes
+      for (final node in _defaultDHTNodes) {
+        task.addDHTNode(node);
+      }
+
       await task.start();
+      task.requestPeersFromDHT();
+
+      // Add DHT nodes again after start
+      for (final node in _defaultDHTNodes) {
+        task.addDHTNode(node);
+      }
+
       _startPolling(item.id, taskModel, controller);
     } catch (e) {
       debugPrint('[TorrentEngine] Task start error: $e');
@@ -215,38 +339,56 @@ class TorrentEngineService {
 
   void _startPolling(String id, TorrentTaskModel tm, StreamController<TorrentTaskModel> c) {
     _pollers[id]?.cancel();
+    double lastProgress = -1;
+
     _pollers[id] = Timer.periodic(const Duration(seconds: 1), (timer) async {
       final task = _tasks[id];
       if (task == null) { timer.cancel(); return; }
 
-      final progress = task.progress;
-      final dlSpeed = task.currentDownloadSpeed;
-      final ulSpeed = task.uploadSpeed;
-      final total = task.metaInfo.files.fold<int>(0, (s, f) => s + f.length);
-      final downloaded = (progress * total).toInt();
-      final remaining = total - downloaded;
-      final eta = dlSpeed > 0 ? (remaining / dlSpeed).round() : 0;
-
-      int seeders = 0;
       try {
-        final ap = task.activePeers;
-        if (ap != null) seeders = ap.length;
-      } catch (_) {}
+        final progress = task.progress;
+        final dlSpeed = task.currentDownloadSpeed;
+        final ulSpeed = task.uploadSpeed;
+        final avgDlSpeed = task.averageDownloadSpeed;
+        final avgUlSpeed = task.averageUploadSpeed;
+        final total = task.metaInfo.files.fold<int>(0, (s, f) => s + f.length);
+        final downloaded = task.downloaded ?? (progress * total).toInt();
+        final remaining = total - downloaded;
+        final eta = dlSpeed > 0 ? (remaining / dlSpeed).round() : 0;
 
-      tm.progress = progress;
-      tm.downloadedBytes = downloaded;
-      tm.totalBytes = total;
-      tm.downloadSpeed = dlSpeed.toDouble();
-      tm.uploadSpeed = ulSpeed.toDouble();
-      tm.etaSeconds = eta;
-      tm.seeders = seeders;
-      tm.state = progress >= 1.0 ? TorrentTaskState.completed : TorrentTaskState.downloading;
+        final seeders = task.seederNumber;
+        final connectedPeers = task.connectedPeersNumber;
+        final allPeers = task.allPeersNumber;
 
-      if (progress >= 1.0) timer.cancel();
-      c.add(tm);
+        tm.progress = progress;
+        tm.downloadedBytes = downloaded;
+        tm.totalBytes = total;
+        tm.downloadSpeed = dlSpeed.toDouble();
+        tm.uploadSpeed = ulSpeed.toDouble();
+        tm.averageDownloadSpeed = avgDlSpeed;
+        tm.averageUploadSpeed = avgUlSpeed;
+        tm.etaSeconds = eta;
+        tm.seeders = seeders;
+        tm.peers = connectedPeers;
+        tm.allPeers = allPeers;
 
-      if ((progress * 100).toInt() % 10 == 0) {
-        await _repo.update(tm);
+        if (progress >= 1.0) {
+          tm.state = TorrentTaskState.seeding;
+        } else if (tm.state != TorrentTaskState.paused) {
+          tm.state = TorrentTaskState.downloading;
+        }
+
+        c.add(tm);
+
+        // Auto-save at 5% intervals + 0.1s debounce after progress change
+        final pct = (progress * 100).toInt();
+        final lastPct = (lastProgress * 100).toInt();
+        if (pct >= 0 && pct % 5 == 0 && pct != lastPct) {
+          await _repo.update(tm);
+        }
+        lastProgress = progress;
+      } catch (e) {
+        debugPrint('[TorrentEngine] Poll error: $e');
       }
     });
   }
@@ -295,11 +437,55 @@ class TorrentEngineService {
     if (task.metadataBytes != null) {
       try {
         final model = TorrentParser.parseBytes(task.metadataBytes!);
-        final t = TorrentTask.newTask(model, task.savePath, task.isSequential);
+        final seqConfig = task.isSequential
+            ? SequentialConfig.forVideoStreaming()
+            : null;
+
+        // Rebuild tracker-enriched model for restore
+        final enrichedModel = TorrentModel(
+          name: model.name,
+          files: model.files,
+          infoHashBuffer: model.infoHashBuffer,
+          pieceLength: model.pieceLength,
+          pieces: model.pieces,
+          announces: [...model.announces, ..._fallbackTrackers],
+          nodes: [..._defaultDHTNodes, ...model.nodes],
+          length: model.length,
+          version: model.version,
+          metaVersion: model.metaVersion,
+          fileTree: model.fileTree,
+          pieceLayers: model.pieceLayers,
+          rootHash: model.rootHash,
+          infoDictBytes: model.infoDictBytes,
+          rawData: model.rawData,
+        );
+
+        final t = TorrentTask.newTask(
+          enrichedModel,
+          task.savePath,
+          task.isSequential,
+          null,
+          null,
+          seqConfig,
+          _buildProxyConfig(),
+        );
         _tasks[id] = t;
+
+        // Apply file selections
+        if (task.selectedFileIndices.isNotEmpty) {
+          t.applySelectedFiles(task.selectedFileIndices);
+        }
+        t.autoPrioritizeFiles();
+
+        // DHT nodes
+        for (final node in _defaultDHTNodes) {
+          t.addDHTNode(node);
+        }
+
         final controller = StreamController<TorrentTaskModel>.broadcast();
         _controllers[id] = controller;
         await t.start();
+        t.requestPeersFromDHT();
         _startPolling(id, task, controller);
       } catch (e) {
         debugPrint('[TorrentEngine] Restore failed: $e');
@@ -325,4 +511,13 @@ class TorrentMetadataException implements Exception {
   TorrentMetadataException(this.message);
   @override
   String toString() => message;
+}
+
+String _friendlyError(String? raw) {
+  if (raw == null) return 'Failed to fetch torrent metadata.';
+  final lower = raw.toLowerCase();
+  if (lower.contains('timeout')) return 'No peers found. Please try again later or use another magnet link.';
+  if (lower.contains('dht') || lower.contains('tracker')) return 'Could not reach the torrent network.';
+  if (lower.contains('invalid') || lower.contains('parse')) return 'The magnet link appears to be invalid.';
+  return raw.length > 120 ? raw.substring(0, 120) : raw;
 }

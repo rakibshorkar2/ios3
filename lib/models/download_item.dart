@@ -27,7 +27,9 @@ class DownloadItem {
   String? torrentTrackers;
   int torrentSeeders;
   int torrentPeers;
+  int torrentAllPeers;
   double uploadSpeedBytesPerSec;
+  double averageDownloadSpeed; // for torrents
   List<int> selectedFileIndices;
   bool isSequential;
 
@@ -51,7 +53,9 @@ class DownloadItem {
     this.torrentTrackers,
     this.torrentSeeders = 0,
     this.torrentPeers = 0,
+    this.torrentAllPeers = 0,
     this.uploadSpeedBytesPerSec = 0,
+    this.averageDownloadSpeed = 0,
     this.selectedFileIndices = const [],
     this.isSequential = false,
     DateTime? addedAt,
@@ -91,7 +95,9 @@ class DownloadItem {
     String? torrentTrackers,
     int? torrentSeeders,
     int? torrentPeers,
+    int? torrentAllPeers,
     double? uploadSpeedBytesPerSec,
+    double? averageDownloadSpeed,
     List<int>? selectedFileIndices,
     bool? isSequential,
   }) =>
@@ -115,7 +121,9 @@ class DownloadItem {
         torrentTrackers: torrentTrackers ?? this.torrentTrackers,
         torrentSeeders: torrentSeeders ?? this.torrentSeeders,
         torrentPeers: torrentPeers ?? this.torrentPeers,
+        torrentAllPeers: torrentAllPeers ?? this.torrentAllPeers,
         uploadSpeedBytesPerSec: uploadSpeedBytesPerSec ?? this.uploadSpeedBytesPerSec,
+        averageDownloadSpeed: averageDownloadSpeed ?? this.averageDownloadSpeed,
         selectedFileIndices: selectedFileIndices ?? this.selectedFileIndices,
         isSequential: isSequential ?? this.isSequential,
         addedAt: addedAt,
@@ -140,7 +148,9 @@ class DownloadItem {
     'torrentTrackers': torrentTrackers,
     'torrentSeeders': torrentSeeders,
     'torrentPeers': torrentPeers,
+    'torrentAllPeers': torrentAllPeers,
     'uploadSpeedBytesPerSec': uploadSpeedBytesPerSec,
+    'averageDownloadSpeed': averageDownloadSpeed,
     'selectedFileIndices': selectedFileIndices.join(','),
     'isSequential': isSequential ? 1 : 0,
   };
@@ -168,7 +178,9 @@ class DownloadItem {
       torrentTrackers: json['torrentTrackers'],
       torrentSeeders: json['torrentSeeders'] ?? 0,
       torrentPeers: json['torrentPeers'] ?? 0,
+      torrentAllPeers: json['torrentAllPeers'] ?? 0,
       uploadSpeedBytesPerSec: (json['uploadSpeedBytesPerSec'] ?? 0).toDouble(),
+      averageDownloadSpeed: (json['averageDownloadSpeed'] ?? 0).toDouble(),
       selectedFileIndices: selStr != null && selStr.isNotEmpty
           ? selStr.split(',').map((e) => int.tryParse(e) ?? 0).toList()
           : [],

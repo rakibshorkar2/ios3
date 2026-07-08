@@ -20,7 +20,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'dirxplore_downloads.db');
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -47,7 +47,9 @@ class DatabaseHelper {
         torrentTrackers TEXT,
         torrentSeeders INTEGER DEFAULT 0,
         torrentPeers INTEGER DEFAULT 0,
+        torrentAllPeers INTEGER DEFAULT 0,
         uploadSpeedBytesPerSec REAL DEFAULT 0,
+        averageDownloadSpeed REAL DEFAULT 0,
         selectedFileIndices TEXT,
         isSequential INTEGER DEFAULT 0
       )
@@ -71,6 +73,18 @@ class DatabaseHelper {
     }
     if (oldVersion < 4) {
       await db.execute('ALTER TABLE downloads ADD COLUMN isSequential INTEGER DEFAULT 0');
+    }
+    if (oldVersion < 5) {
+      await _safeAddColumn(db, 'downloads', 'torrentAllPeers', 'INTEGER DEFAULT 0');
+      await _safeAddColumn(db, 'downloads', 'averageDownloadSpeed', 'REAL DEFAULT 0');
+    }
+  }
+
+  Future<void> _safeAddColumn(Database db, String table, String column, String type) async {
+    final cols = await db.rawQuery("PRAGMA table_info('$table')");
+    final colNames = cols.map((c) => c['name'] as String).toList();
+    if (!colNames.contains(column)) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
     }
   }
 

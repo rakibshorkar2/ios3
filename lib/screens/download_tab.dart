@@ -550,10 +550,27 @@ class _DownloadTabState extends State<DownloadTab> {
                         Icon(Icons.people, size: 12,
                             color: cs.onSurface.withValues(alpha: 0.5)),
                         const SizedBox(width: 3),
-                        Text('S: ${item.torrentSeeders} P: ${item.torrentPeers}',
+                        Text('S:${item.torrentSeeders} P:${item.torrentPeers}',
                             style: TextStyle(
                                 fontSize: 10,
                                 color: cs.onSurface.withValues(alpha: 0.6))),
+                        if (item.torrentAllPeers > 0) ...[
+                          const SizedBox(width: 4),
+                          Text('/${item.torrentAllPeers}',
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: cs.onSurface.withValues(alpha: 0.4))),
+                        ],
+                        if (item.averageDownloadSpeed > 0) ...[
+                          const SizedBox(width: 8),
+                          Icon(Icons.speed, size: 12,
+                              color: cs.onSurface.withValues(alpha: 0.5)),
+                          const SizedBox(width: 3),
+                          Text(_formatAvgSpeed(item.averageDownloadSpeed),
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: cs.onSurface.withValues(alpha: 0.6))),
+                        ],
                       ],
                     ),
                   ],
@@ -973,6 +990,17 @@ class _DownloadTabState extends State<DownloadTab> {
       return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s up';
     } else {
       return '${bytesPerSec.toStringAsFixed(0)} B/s up';
+    }
+  }
+
+  String _formatAvgSpeed(double bytesPerSec) {
+    if (bytesPerSec <= 0) return '0 B/s';
+    if (bytesPerSec > 1024 * 1024) {
+      return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s avg';
+    } else if (bytesPerSec > 1024) {
+      return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s avg';
+    } else {
+      return '${bytesPerSec.toStringAsFixed(0)} B/s avg';
     }
   }
 }

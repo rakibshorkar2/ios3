@@ -773,6 +773,8 @@ class DownloadProvider with ChangeNotifier {
         item.etaSeconds = tm.etaSeconds;
         item.torrentSeeders = tm.seeders;
         item.torrentPeers = tm.peers;
+        item.torrentAllPeers = tm.allPeers;
+        item.averageDownloadSpeed = tm.averageDownloadSpeed;
         item.errorMessage = tm.errorMessage;
         notifyListeners();
         DatabaseHelper().updateDownload(item);

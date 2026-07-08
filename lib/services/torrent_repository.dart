@@ -20,7 +20,7 @@ class TorrentRepository {
     final path = p.join(dbPath, 'torrent_tasks.db');
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE torrent_tasks(
@@ -35,16 +35,46 @@ class TorrentRepository {
             downloadedBytes INTEGER,
             downloadSpeed REAL,
             uploadSpeed REAL,
+            averageDownloadSpeed REAL DEFAULT 0,
+            averageUploadSpeed REAL DEFAULT 0,
             etaSeconds INTEGER,
             seeders INTEGER,
             peers INTEGER,
+            allPeers INTEGER DEFAULT 0,
+            piecesCompleted INTEGER DEFAULT 0,
+            totalPieces INTEGER DEFAULT 0,
             trackers TEXT,
             selectedFileIndices TEXT,
             isSequential INTEGER DEFAULT 0,
             errorMessage TEXT,
-            addedAt TEXT
+            addedAt TEXT,
+            filesCompleted TEXT DEFAULT ''
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          final columns = await db.rawQuery("PRAGMA table_info('torrent_tasks')");
+          final colNames = columns.map((c) => c['name'] as String).toList();
+          if (!colNames.contains('averageDownloadSpeed')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN averageDownloadSpeed REAL DEFAULT 0");
+          }
+          if (!colNames.contains('averageUploadSpeed')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN averageUploadSpeed REAL DEFAULT 0");
+          }
+          if (!colNames.contains('allPeers')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN allPeers INTEGER DEFAULT 0");
+          }
+          if (!colNames.contains('piecesCompleted')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN piecesCompleted INTEGER DEFAULT 0");
+          }
+          if (!colNames.contains('totalPieces')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN totalPieces INTEGER DEFAULT 0");
+          }
+          if (!colNames.contains('filesCompleted')) {
+            await db.execute("ALTER TABLE torrent_tasks ADD COLUMN filesCompleted TEXT DEFAULT ''");
+          }
+        }
       },
     );
   }
