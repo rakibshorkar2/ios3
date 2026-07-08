@@ -1,13 +1,13 @@
 import Flutter
 import Foundation
 
-final class TorrentService: NSObject, FlutterPlugin {
+public final class TorrentService: NSObject, FlutterPlugin {
     private static let methodChannel = "com.dirxplore/torrent"
     private static let eventChannel = "com.dirxplore/torrent_events"
 
     private var eventSink: FlutterEventSink?
 
-    static func register(with registrar: FlutterPluginRegistrar) {
+    public static func register(with registrar: FlutterPluginRegistrar) {
         let method = FlutterMethodChannel(name: methodChannel, binaryMessenger: registrar.messenger())
         let events = FlutterEventChannel(name: eventChannel, binaryMessenger: registrar.messenger())
 
@@ -16,7 +16,7 @@ final class TorrentService: NSObject, FlutterPlugin {
         events.setStreamHandler(instance)
     }
 
-    func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let manager = TorrentManager.shared
         let args = call.arguments as? [String: Any]
 
@@ -101,13 +101,13 @@ final class TorrentService: NSObject, FlutterPlugin {
 }
 
 extension TorrentService: FlutterStreamHandler {
-    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         eventSink = events
         TorrentManager.shared.setEventSink(events)
         return nil
     }
 
-    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
         eventSink = nil
         TorrentManager.shared.setEventSink(nil)
         return nil
