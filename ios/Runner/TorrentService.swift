@@ -18,7 +18,6 @@ public final class TorrentService: NSObject, FlutterPlugin {
         events.setStreamHandler(instance)
 
         debugPrint("[TorrentService] register() complete — channels ready, engine NOT initialized")
-        debugPrint("[TorrentService] Framework available: \(TorrentCppWrapper.isFrameworkAvailable())")
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

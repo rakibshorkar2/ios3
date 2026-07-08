@@ -11,14 +11,6 @@
 
 @end
 
-static BOOL TorrentFrameworkAvailable(void) {
-    if (tryagi_libtorrent_session_create == NULL) {
-        NSLog(@"[TorrentCpp] LibtorrentNative.framework not loaded (symbols are NULL)");
-        return NO;
-    }
-    return YES;
-}
-
 static void EventCallbackTrampoline(const char *json, void *context) {
     TorrentCppWrapper *wrapper = (__bridge TorrentCppWrapper *)context;
     NSString *jsonString = [NSString stringWithUTF8String:json];
@@ -44,23 +36,12 @@ static void EventCallbackTrampoline(const char *json, void *context) {
     [self shutdownSession];
 }
 
-#pragma mark - Framework Availability
-
-+ (BOOL)isFrameworkAvailable {
-    return TorrentFrameworkAvailable();
-}
-
 #pragma mark - Session
 
 - (BOOL)initializeSession:(nullable TorrentEventCallback)callback {
 #ifdef DEBUG
     NSLog(@"[TorrentCpp] initializeSession called");
 #endif
-
-    if (!TorrentFrameworkAvailable()) {
-        NSLog(@"[TorrentCpp] Session init failed: LibtorrentNative.framework not loaded");
-        return NO;
-    }
 
     if (_session) {
 #ifdef DEBUG
@@ -96,12 +77,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 
 - (void)shutdownSession {
     if (_session) {
-        if (!TorrentFrameworkAvailable()) {
-            NSLog(@"[TorrentCpp] shutdownSession: framework not available, skipping destroy");
-            _session = NULL;
-            self.eventCallback = nil;
-            return;
-        }
 #ifdef DEBUG
         NSLog(@"[TorrentCpp] Destroying session %p", _session);
 #endif
@@ -123,11 +98,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 #ifdef DEBUG
         NSLog(@"[TorrentCpp] addMagnet rejected: no active session");
 #endif
-        return nil;
-    }
-
-    if (!TorrentFrameworkAvailable()) {
-        NSLog(@"[TorrentCpp] addMagnet: framework not available");
         return nil;
     }
 
@@ -168,11 +138,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
         return nil;
     }
 
-    if (!TorrentFrameworkAvailable()) {
-        NSLog(@"[TorrentCpp] addTorrentFile: framework not available");
-        return nil;
-    }
-
     NSData *fileData = [NSData dataWithContentsOfFile:filePath];
     if (!fileData) {
         NSLog(@"[TorrentCpp] Cannot read torrent file at path: %@", filePath);
@@ -210,7 +175,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 
 - (BOOL)pauseTorrent:(NSString *)jobId {
     if (!_session) return NO;
-    if (!TorrentFrameworkAvailable()) return NO;
 
     NSString *json = [NSString stringWithFormat:@"{\"jobId\":\"%@\"}", jobId];
 
@@ -227,7 +191,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 
 - (BOOL)resumeTorrent:(NSString *)jobId {
     if (!_session) return NO;
-    if (!TorrentFrameworkAvailable()) return NO;
 
     NSString *json = [NSString stringWithFormat:@"{\"jobId\":\"%@\"}", jobId];
 
@@ -244,7 +207,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 
 - (BOOL)removeTorrent:(NSString *)jobId deleteFiles:(BOOL)deleteFiles {
     if (!_session) return NO;
-    if (!TorrentFrameworkAvailable()) return NO;
 
     NSString *json;
     if (deleteFiles) {
@@ -267,7 +229,6 @@ static void EventCallbackTrampoline(const char *json, void *context) {
 #pragma mark - Error
 
 - (nullable NSString *)lastError {
-    if (!TorrentFrameworkAvailable()) return @"LibtorrentNative.framework not loaded";
     const char *err = tryagi_libtorrent_last_error(_session);
     if (!err) return nil;
     return [NSString stringWithUTF8String:err];
