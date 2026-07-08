@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:dtorrent_task_v2/dtorrent_task_v2.dart';
 import '../models/download_item.dart';
 import '../models/torrent_task_model.dart';
 import 'torrent_repository.dart';
+import 'native_torrent_engine_bridge.dart';
 
 class MagnetInfo {
   final String hash;
@@ -41,6 +43,9 @@ class TorrentEngineService {
   final Map<String, StreamController<TorrentTaskModel>> _controllers = {};
   final Map<String, Uint8List> _metadataCache = {};
   final TorrentRepository _repo = TorrentRepository();
+
+  final NativeTorrentEngineBridge _nativeBridge = NativeTorrentEngineBridge();
+  final bool _useNative = Platform.isIOS;
 
   // Proxy settings wired via ProxyConfig to TorrentTask.newTask()
   bool _proxyEnabled = false;
@@ -174,8 +179,68 @@ class TorrentEngineService {
   Stream<TorrentTaskModel> startTask(DownloadItem item, {bool isSequential = false, Uint8List? metadata}) {
     final controller = StreamController<TorrentTaskModel>.broadcast();
     _controllers[item.id] = controller;
-    _startTaskInner(item, controller, isSequential: isSequential, metadata: metadata);
+    if (_useNative) {
+      _startTaskNative(item, controller, isSequential: isSequential);
+    } else {
+      _startTaskInner(item, controller, isSequential: isSequential, metadata: metadata);
+    }
     return controller.stream;
+  }
+
+  Future<void> _startTaskNative(DownloadItem item, StreamController<TorrentTaskModel> controller,
+      {bool isSequential = false}) async {
+    try {
+      final magnet = item.url;
+      await _nativeBridge.initialize();
+      final nativeId = await _nativeBridge.addMagnet(magnet, item.savePath);
+      if (nativeId == null) {
+        throw TorrentMetadataException('Failed to start native torrent');
+      }
+
+      final tm = TorrentTaskModel(
+        id: item.id,
+        magnetLink: magnet,
+        savePath: item.savePath,
+        name: item.fileName,
+        state: TorrentTaskState.metadata,
+        selectedFileIndices: item.selectedFileIndices,
+        isSequential: isSequential,
+      );
+      await _repo.insert(tm);
+      controller.add(tm);
+
+      _nativeBridge.updates.listen((update) {
+        if (update.id != nativeId) return;
+        tm.state = update.state;
+        tm.progress = update.progress;
+        tm.downloadedBytes = update.downloadedBytes;
+        tm.totalBytes = update.totalBytes;
+        tm.downloadSpeed = update.downloadSpeed;
+        tm.uploadSpeed = update.uploadSpeed;
+        tm.averageDownloadSpeed = update.averageDownloadSpeed.isNaN ? update.downloadSpeed : update.averageDownloadSpeed;
+        tm.averageUploadSpeed = update.averageUploadSpeed.isNaN ? update.uploadSpeed : update.averageUploadSpeed;
+        tm.etaSeconds = update.eta;
+        tm.seeders = update.seeds;
+        tm.peers = update.peers;
+        tm.allPeers = update.allPeers;
+        tm.piecesCompleted = update.piecesCompleted;
+        tm.totalPieces = update.totalPieces;
+        tm.name = update.name;
+        tm.infoHash = update.infoHash;
+        tm.errorMessage = update.errorMessage;
+        controller.add(tm);
+        _repo.update(tm);
+      });
+    } catch (e) {
+      debugPrint('[TorrentEngine] Native start error: $e');
+      final tm = TorrentTaskModel(
+        id: item.id, magnetLink: item.url, savePath: item.savePath,
+        state: TorrentTaskState.error, errorMessage: e.toString(),
+      );
+      controller.add(tm);
+      await controller.close();
+      _controllers.remove(item.id);
+    }
   }
 
   Future<void> _startTaskInner(DownloadItem item, StreamController<TorrentTaskModel> controller,
@@ -394,8 +459,12 @@ class TorrentEngineService {
   }
 
   Future<void> pauseTask(String id) async {
-    _pollers[id]?.cancel();
-    _tasks[id]?.pause();
+    if (_useNative) {
+      await _nativeBridge.pauseTorrent(id);
+    } else {
+      _pollers[id]?.cancel();
+      _tasks[id]?.pause();
+    }
     final models = await _repo.getAll();
     final idx = models.indexWhere((m) => m.id == id);
     if (idx != -1) {
@@ -405,32 +474,42 @@ class TorrentEngineService {
   }
 
   Future<void> resumeTask(String id) async {
-    final task = _tasks[id];
-    if (task != null) {
-      task.resume();
-      final models = await _repo.getAll();
-      final idx = models.indexWhere((m) => m.id == id);
-      if (idx != -1) {
-        models[idx].state = TorrentTaskState.downloading;
-        await _repo.update(models[idx]);
-        _startPolling(id, models[idx], _controllers[id] ?? StreamController<TorrentTaskModel>.broadcast());
+    if (_useNative) {
+      await _nativeBridge.resumeTorrent(id);
+    } else {
+      final task = _tasks[id];
+      if (task != null) {
+        task.resume();
+        final models = await _repo.getAll();
+        final idx = models.indexWhere((m) => m.id == id);
+        if (idx != -1) {
+          models[idx].state = TorrentTaskState.downloading;
+          await _repo.update(models[idx]);
+          _startPolling(id, models[idx], _controllers[id] ?? StreamController<TorrentTaskModel>.broadcast());
+        }
       }
     }
   }
 
   Future<void> stopTask(String id) async {
-    _pollers[id]?.cancel();
-    _pollers.remove(id);
-    _tasks[id]?.stop();
-    _tasks.remove(id);
+    if (_useNative) {
+      await _nativeBridge.removeTorrent(id);
+    } else {
+      _pollers[id]?.cancel();
+      _pollers.remove(id);
+      _tasks[id]?.stop();
+      _tasks.remove(id);
+    }
     await _controllers[id]?.close();
     _controllers.remove(id);
     await _repo.delete(id);
   }
 
-  Future<List<TorrentTaskModel>> getSavedTasks() => _repo.getAll();
-
   Future<void> restoreTask(String id) async {
+    if (_useNative) {
+      debugPrint('[TorrentEngine] Native engine handles restore automatically');
+      return;
+    }
     final models = await _repo.getAll();
     final task = models.where((m) => m.id == id).firstOrNull;
     if (task == null) return;
@@ -441,7 +520,6 @@ class TorrentEngineService {
             ? SequentialConfig.forVideoStreaming()
             : null;
 
-        // Rebuild tracker-enriched model for restore
         final enrichedModel = TorrentModel(
           name: model.name,
           files: model.files,
@@ -471,13 +549,11 @@ class TorrentEngineService {
         );
         _tasks[id] = t;
 
-        // Apply file selections
         if (task.selectedFileIndices.isNotEmpty) {
           t.applySelectedFiles(task.selectedFileIndices);
         }
         t.autoPrioritizeFiles();
 
-        // DHT nodes
         for (final node in _defaultDHTNodes) {
           t.addDHTNode(node);
         }
@@ -493,14 +569,20 @@ class TorrentEngineService {
     }
   }
 
+  Future<List<TorrentTaskModel>> getSavedTasks() => _repo.getAll();
+
   TorrentTask? getTask(String id) => _tasks[id];
   Stream<TorrentTaskModel>? streamFor(String id) => _controllers[id]?.stream;
 
   void dispose() {
-    for (final t in _pollers.values) t.cancel();
-    _pollers.clear();
-    for (final t in _tasks.values) t.stop();
-    _tasks.clear();
+    if (_useNative) {
+      _nativeBridge.dispose();
+    } else {
+      for (final t in _pollers.values) t.cancel();
+      _pollers.clear();
+      for (final t in _tasks.values) t.stop();
+      _tasks.clear();
+    }
     for (final c in _controllers.values) c.close();
     _controllers.clear();
   }

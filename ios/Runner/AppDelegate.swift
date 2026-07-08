@@ -12,6 +12,9 @@ import UserNotifications
         if let registrar = self.registrar(forPlugin: "DownloadPlugin") {
             DownloadPlugin.register(with: registrar)
         }
+        if let registrar = self.registrar(forPlugin: "TorrentService") {
+            TorrentService.register(with: registrar)
+        }
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
 

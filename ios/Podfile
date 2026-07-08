@@ -37,6 +37,13 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
+  # LibtorrentNative prebuilt XCFramework
+  libtorrent_xcframework = File.join(__dir__, 'Frameworks', 'LibtorrentNative.xcframework')
+  unless Dir.exist?(libtorrent_xcframework)
+    Pod::UI.puts 'LibtorrentNative.xcframework not found, skipping pod (will be downloaded in CI)'
+  end
+  pod 'LibtorrentNative', :path => '.'
 end
 
 post_install do |installer|
@@ -48,6 +55,12 @@ post_install do |installer|
         'PERMISSION_NOTIFICATIONS=1',
         'PERMISSION_PHOTOS=1',
       ]
+    end
+  end
+
+  installer.generated_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['FRAMEWORK_SEARCH_PATHS'] ||= ['$(inherited)', '$(PROJECT_DIR)/Frameworks']
     end
   end
 end
