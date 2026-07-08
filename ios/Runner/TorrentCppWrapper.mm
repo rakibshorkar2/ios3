@@ -7,6 +7,8 @@
 
 @property (nonatomic, copy, nullable) TorrentEventCallback eventCallback;
 
+- (void)handleEvent:(NSString *)json;
+
 @end
 
 static void EventCallbackTrampoline(const char *json, void *context) {
