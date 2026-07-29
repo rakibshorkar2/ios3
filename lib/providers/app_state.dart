@@ -54,6 +54,10 @@ class AppState with ChangeNotifier {
   // BRWSR Settings
   bool _brwsrLiveActivityEnabled = true;
   bool _brwsrBackgroundServiceEnabled = false;
+  String _brwsrSearchEngine = 'Google';
+  String _customAdBlockerDns = '';
+  String _customAdBlockerDomains = '';
+
 
 
   ThemeMode get themeMode => _themeMode;
@@ -100,6 +104,10 @@ class AppState with ChangeNotifier {
   // BRWSR Settings Getters
   bool get brwsrLiveActivityEnabled => _brwsrLiveActivityEnabled;
   bool get brwsrBackgroundServiceEnabled => _brwsrBackgroundServiceEnabled;
+  String get brwsrSearchEngine => _brwsrSearchEngine;
+  String get customAdBlockerDns => _customAdBlockerDns;
+  String get customAdBlockerDomains => _customAdBlockerDomains;
+
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -168,6 +176,10 @@ class AppState with ChangeNotifier {
 
     _brwsrLiveActivityEnabled = prefs.getBool('brwsrLiveActivityEnabled') ?? true;
     _brwsrBackgroundServiceEnabled = prefs.getBool('brwsrBackgroundServiceEnabled') ?? false;
+    _brwsrSearchEngine = prefs.getString('brwsrSearchEngine') ?? 'Google';
+    _customAdBlockerDns = prefs.getString('customAdBlockerDns') ?? '';
+    _customAdBlockerDomains = prefs.getString('customAdBlockerDomains') ?? '';
+
 
     if (Platform.isIOS) {
       try {
@@ -494,4 +506,26 @@ class AppState with ChangeNotifier {
       }
     }
   }
+
+  Future<void> setBrwsrSearchEngine(String engine) async {
+    _brwsrSearchEngine = engine;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('brwsrSearchEngine', engine);
+  }
+
+  Future<void> setCustomAdBlockerDns(String dns) async {
+    _customAdBlockerDns = dns;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('customAdBlockerDns', dns);
+  }
+
+  Future<void> setCustomAdBlockerDomains(String domains) async {
+    _customAdBlockerDomains = domains;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('customAdBlockerDomains', domains);
+  }
 }
+

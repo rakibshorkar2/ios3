@@ -4,6 +4,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'dart:io' show Platform;
+import 'dart:convert';
 import '../providers/brwsr_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
@@ -62,7 +63,7 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     return url;
   }
 
-  void _submitUrl(String input, BRWSRProvider provider) {
+  void _submitUrl(String input, BRWSRProvider provider, AppState appState) {
     _urlFocusNode.unfocus();
     final trimmed = input.trim();
     if (trimmed.isEmpty) return;
@@ -78,8 +79,23 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         finalUrl = 'https://$trimmed';
       }
     } else {
-      // Treat as search query
-      finalUrl = 'https://www.google.com/search?q=${Uri.encodeComponent(trimmed)}';
+      // Custom search engine URL builder
+      final encoded = Uri.encodeComponent(trimmed);
+      switch (appState.brwsrSearchEngine) {
+        case 'DuckDuckGo':
+          finalUrl = 'https://duckduckgo.com/?q=$encoded';
+          break;
+        case 'Bing':
+          finalUrl = 'https://www.bing.com/search?q=$encoded';
+          break;
+        case 'Brave':
+          finalUrl = 'https://search.brave.com/search?q=$encoded';
+          break;
+        case 'Google':
+        default:
+          finalUrl = 'https://www.google.com/search?q=$encoded';
+          break;
+      }
     }
 
     final activeTab = provider.activeTab;
@@ -115,6 +131,23 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     }
   }
 
+  void _injectDesktopViewport(InAppWebViewController controller) {
+    const script = '''
+      (function() {
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (meta) {
+          meta.setAttribute('content', 'width=1280, initial-scale=0.75, maximum-scale=3.0, user-scalable=yes');
+        } else {
+          meta = document.createElement('meta');
+          meta.name = 'viewport';
+          meta.content = 'width=1280, initial-scale=0.75, maximum-scale=3.0, user-scalable=yes';
+          document.getElementsByTagName('head')[0].appendChild(meta);
+        }
+      })();
+    ''';
+    controller.evaluateJavascript(source: script);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -126,6 +159,8 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
       _urlController.text = _formatDisplayUrl(activeTab.url);
     }
 
+    final isGDrivePage = activeTab?.url.contains('drive.google.com') ?? false;
+
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 8,
@@ -133,15 +168,21 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         backgroundColor: activeTab?.isIncognito == true
             ? Colors.grey[900]
             : Theme.of(context).appBarTheme.backgroundColor,
-        title: _buildAddressBar(context, provider, activeTab),
+        title: _buildAddressBar(context, provider, appState, activeTab),
         actions: [
+          if (activeTab?.detectedMediaLinks.isNotEmpty == true)
+            IconButton(
+              icon: const Icon(Icons.download_for_offline, color: Colors.cyanAccent),
+              tooltip: 'Media Sniffer',
+              onPressed: () => _showMediaSnifferModal(context, activeTab!),
+            ),
           IconButton(
             icon: Icon(
               provider.adBlockerEnabled ? Icons.shield : Icons.shield_outlined,
               color: provider.adBlockerEnabled ? Colors.green : Colors.grey,
             ),
             tooltip: 'Ad Blocker Stats',
-            onPressed: () => _showAdBlockerDialog(context, provider),
+            onPressed: () => _showAdBlockerDialog(context, provider, appState),
           ),
           IconButton(
             icon: Icon(
@@ -181,6 +222,33 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
                 minHeight: 2.5,
               ),
 
+            // Google Drive Action Banner
+            if (isGDrivePage && activeTab != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                color: Colors.blue.withValues(alpha: 0.15),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_download, color: Colors.blueAccent),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Google Drive Link Detected',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () => _showGDriveBatchModal(context, provider, activeTab),
+                      icon: const Icon(Icons.folder_zip, size: 16),
+                      label: const Text('Batch Download', style: TextStyle(fontSize: 12)),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // Main Web View
             Expanded(
               child: activeTab == null
@@ -208,7 +276,7 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
   }
 
   Widget _buildAddressBar(
-      BuildContext context, BRWSRProvider provider, BRWSRTabData? activeTab) {
+      BuildContext context, BRWSRProvider provider, AppState appState, BRWSRTabData? activeTab) {
     final isHttps = activeTab?.url.startsWith('https://') ?? false;
 
     return Container(
@@ -223,7 +291,7 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         keyboardType: TextInputType.url,
         textInputAction: TextInputAction.go,
         style: const TextStyle(fontSize: 14),
-        onSubmitted: (val) => _submitUrl(val, provider),
+        onSubmitted: (val) => _submitUrl(val, provider, appState),
         decoration: InputDecoration(
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
@@ -301,7 +369,7 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     }
 
     const defaultDesktopUserAgent =
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
     return InAppWebView(
       key: ValueKey('brwsr_tab_${tab.id}'),
@@ -316,7 +384,9 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         databaseEnabled: true,
         incognito: tab.isIncognito,
         cacheEnabled: !tab.isIncognito,
-        contentBlockers: provider.getAdBlockerRules(),
+        contentBlockers: provider.getAdBlockerRules(
+          customDomains: appState.customAdBlockerDomains,
+        ),
         userAgent: tab.isDesktopMode ? defaultDesktopUserAgent : null,
         preferredContentMode: tab.isDesktopMode
             ? UserPreferredContentMode.DESKTOP
@@ -340,6 +410,10 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
           provider.updateActiveTabUrl(url.toString());
           final title = await controller.getTitle() ?? url.toString();
           provider.updateActiveTabTitle(title);
+
+          if (tab.isDesktopMode) {
+            _injectDesktopViewport(controller);
+          }
 
           final canGoBack = await controller.canGoBack();
           final canGoForward = await controller.canGoForward();
@@ -374,8 +448,18 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         _handleDownloadStart(context, downloadStartRequest);
       },
       onLoadResource: (controller, resource) {
-        // Simple heuristic for blocked ad requests
         final url = resource.url.toString();
+        // Sniff direct media streams
+        if (url.endsWith('.mp4') ||
+            url.endsWith('.mkv') ||
+            url.endsWith('.mp3') ||
+            url.endsWith('.m4a') ||
+            url.endsWith('.pdf') ||
+            url.endsWith('.zip')) {
+          provider.addDetectedMediaLink(url);
+        }
+
+        // Ad Blocker check
         if (provider.adBlockerEnabled &&
             (url.contains('doubleclick') ||
                 url.contains('pagead') ||
@@ -383,6 +467,231 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
                 url.contains('adservice'))) {
           provider.registerAdBlockedOnPage();
         }
+      },
+    );
+  }
+
+  void _showGDriveBatchModal(
+      BuildContext context, BRWSRProvider provider, BRWSRTabData tab) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return FutureBuilder<List<GDriveItem>>(
+          future: provider.extractGoogleDriveFolder(tab.url, tab.controller),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Container(
+                height: 300,
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Scanning Google Drive Shared Link...'),
+                  ],
+                ),
+              );
+            }
+
+            final items = snapshot.data ?? [];
+
+            if (items.isEmpty) {
+              return Container(
+                height: 250,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.info_outline, size: 48, color: Colors.orange),
+                    const SizedBox(height: 12),
+                    const Text('No direct file links detected in folder.'),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return StatefulBuilder(
+              builder: (context, setModalState) {
+                final selectedCount = items.where((i) => i.isSelected).length;
+
+                return Container(
+                  height: MediaQuery.of(context).size.height * 0.75,
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Google Drive Files (${items.length})',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              TextButton(
+                                onPressed: () {
+                                  for (var i in items) {
+                                    i.isSelected = true;
+                                  }
+                                  setModalState(() {});
+                                },
+                                child: const Text('Select All'),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  for (var i in items) {
+                                    i.isSelected = false;
+                                  }
+                                  setModalState(() {});
+                                },
+                                child: const Text('Deselect All'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const Divider(),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: items.length,
+                          itemBuilder: (context, index) {
+                            final item = items[index];
+                            return CheckboxListTile(
+                              value: item.isSelected,
+                              title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(item.id, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              secondary: const Icon(Icons.insert_drive_file, color: Colors.blueAccent),
+                              onChanged: (val) {
+                                item.isSelected = val ?? false;
+                                setModalState(() {});
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton.icon(
+                          onPressed: selectedCount == 0
+                              ? null
+                              : () async {
+                                  Navigator.pop(ctx);
+                                  final appState = context.read<AppState>();
+                                  final dlProvider = context.read<DownloadProvider>();
+                                  int count = 0;
+                                  for (var item in items) {
+                                    if (item.isSelected) {
+                                      await dlProvider.addDownload(
+                                        item.downloadUrl,
+                                        item.name,
+                                        appState.defaultSavePath,
+                                        originalUrl: item.downloadUrl,
+                                      );
+                                      count++;
+                                    }
+                                  }
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Added $count files to Downloads Manager'),
+                                      ),
+                                    );
+                                  }
+                                },
+                          icon: const Icon(Icons.download),
+                          label: Text('Download Selected ($selectedCount)'),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showMediaSnifferModal(BuildContext context, BRWSRTabData tab) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Sniffed Media Streams (${tab.detectedMediaLinks.length})',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const Divider(),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: tab.detectedMediaLinks.length,
+                  itemBuilder: (context, index) {
+                    final mediaUrl = tab.detectedMediaLinks[index];
+                    final filename = mediaUrl.split('/').last.split('?').first;
+                    return ListTile(
+                      leading: const Icon(Icons.play_circle_fill, color: Colors.cyanAccent),
+                      title: Text(filename, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(mediaUrl, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.download),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          final appState = context.read<AppState>();
+                          final dlProvider = context.read<DownloadProvider>();
+                          await dlProvider.addDownload(
+                            mediaUrl,
+                            filename,
+                            appState.defaultSavePath,
+                            originalUrl: mediaUrl,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Added: $filename')),
+                            );
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
       },
     );
   }
@@ -922,7 +1231,8 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     );
   }
 
-  void _showAdBlockerDialog(BuildContext context, BRWSRProvider provider) {
+  void _showAdBlockerDialog(
+      BuildContext context, BRWSRProvider provider, AppState appState) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -951,9 +1261,16 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
             Text('Ads & trackers blocked on this page: ${provider.activeTab?.adsBlockedCount ?? 0}'),
             const SizedBox(height: 4),
             Text('Total blocked this session: ${provider.totalAdsBlockedSession}'),
+            const SizedBox(height: 8),
+            if (appState.customAdBlockerDns.isNotEmpty)
+              Text('Active Custom DNS: ${appState.customAdBlockerDns}',
+                  style: const TextStyle(fontSize: 11, color: Colors.blueAccent)),
+            if (appState.customAdBlockerDomains.isNotEmpty)
+              Text('Custom Blocked Domains: ${appState.customAdBlockerDomains}',
+                  style: const TextStyle(fontSize: 11, color: Colors.purpleAccent)),
             const SizedBox(height: 12),
             const Text(
-              'Blocks known advertising domains, analytics trackers, and popup scripts using native content rule lists.',
+              'Blocks known advertising domains, analytics trackers, custom DNS blocklists, and popup scripts.',
               style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],

@@ -459,6 +459,22 @@ class SettingsTab extends StatelessWidget {
                 context,
                 'BRWSR TAB SETTINGS',
                 [
+                  _buildGlassTile(
+                    title: const Text('Default Search Engine'),
+                    trailing: DropdownButton<String>(
+                      value: appState.brwsrSearchEngine,
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: 'Google', child: Text('Google')),
+                        DropdownMenuItem(value: 'DuckDuckGo', child: Text('DuckDuckGo')),
+                        DropdownMenuItem(value: 'Bing', child: Text('Bing')),
+                        DropdownMenuItem(value: 'Brave', child: Text('Brave')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) appState.setBrwsrSearchEngine(val);
+                      },
+                    ),
+                  ),
                   _buildGlassSwitchTile(
                     title: 'Live Activity (Dynamic Island)',
                     subtitle: 'Show BRWSR web progress on Dynamic Island / Lock Screen',
@@ -470,6 +486,34 @@ class SettingsTab extends StatelessWidget {
                     subtitle: 'Keep BRWSR active in background via silent audio & location',
                     value: appState.brwsrBackgroundServiceEnabled,
                     onChanged: (val) => appState.setBrwsrBackgroundServiceEnabled(val),
+                  ),
+                  _buildGlassTile(
+                    title: const Text('Custom Ad Blocker DNS'),
+                    subtitle: Text(
+                      appState.customAdBlockerDns.isEmpty
+                          ? 'Default (Built-in Rules)'
+                          : appState.customAdBlockerDns,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => _showEditDnsDialog(context, appState),
+                    ),
+                  ),
+                  _buildGlassTile(
+                    title: const Text('Custom Domain Blocklist'),
+                    subtitle: Text(
+                      appState.customAdBlockerDomains.isEmpty
+                          ? 'No custom domains added'
+                          : appState.customAdBlockerDomains,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.edit_note),
+                      onPressed: () => _showEditBlocklistDialog(context, appState),
+                    ),
                   ),
                 ],
               ),
@@ -614,4 +658,84 @@ class SettingsTab extends StatelessWidget {
     );
   }
 
+  void _showEditDnsDialog(BuildContext context, AppState appState) {
+    final controller = TextEditingController(text: appState.customAdBlockerDns);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Custom Ad Blocker DNS'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter custom DNS server IP or DoH address (e.g. 94.140.14.14 or dns.adguard-dns.com):',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: 'e.g. 94.140.14.14',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              appState.setCustomAdBlockerDns(controller.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditBlocklistDialog(BuildContext context, AppState appState) {
+    final controller = TextEditingController(text: appState.customAdBlockerDomains);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Custom Domain Blocklist'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter domain names to block (separated by commas or newlines):',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                hintText: 'e.g. bad-ads.com, tracker.net',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              appState.setCustomAdBlockerDomains(controller.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
 }

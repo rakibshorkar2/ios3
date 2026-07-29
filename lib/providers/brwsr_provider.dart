@@ -1,7 +1,24 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:dio/dio.dart';
 import 'dart:convert';
+
+class GDriveItem {
+  final String id;
+  final String name;
+  final String downloadUrl;
+  final bool isFolder;
+  bool isSelected;
+
+  GDriveItem({
+    required this.id,
+    required this.name,
+    required this.downloadUrl,
+    this.isFolder = false,
+    this.isSelected = true,
+  });
+}
 
 class BRWSRTabData {
   final String id;
@@ -18,6 +35,7 @@ class BRWSRTabData {
   int adsBlockedCount;
   String? faviconUrl;
   String? errorMessage;
+  final List<String> detectedMediaLinks;
 
   BRWSRTabData({
     required this.id,
@@ -34,7 +52,9 @@ class BRWSRTabData {
     this.adsBlockedCount = 0,
     this.faviconUrl,
     this.errorMessage,
-  }) : findController = findController ?? FindInteractionController();
+    List<String>? detectedMediaLinks,
+  })  : findController = findController ?? FindInteractionController(),
+        detectedMediaLinks = detectedMediaLinks ?? [];
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -249,6 +269,13 @@ class BRWSRProvider with ChangeNotifier {
     }
   }
 
+  void addDetectedMediaLink(String mediaUrl) {
+    if (activeTab != null && !activeTab!.detectedMediaLinks.contains(mediaUrl)) {
+      activeTab!.detectedMediaLinks.add(mediaUrl);
+      notifyListeners();
+    }
+  }
+
   void updateActiveTabProgress(double progress) {
     if (activeTab != null) {
       activeTab!.progress = progress;
@@ -434,10 +461,10 @@ class BRWSRProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  List<ContentBlocker> getAdBlockerRules() {
+  List<ContentBlocker> getAdBlockerRules({String? customDomains}) {
     if (!_adBlockerEnabled) return [];
 
-    return [
+    final rules = <ContentBlocker>[
       ContentBlocker(
         trigger: ContentBlockerTrigger(
           urlFilter: ".*(doubleclick\\.net|googlesyndication\\.com|adservice\\.google\\.com|pagead2|adsystem|adnxs\\.com|popads\\.net|taboola\\.com|outbrain\\.com|rubiconproject\\.com|scorecardresearch\\.com|analytics\\.google\\.com|googletagmanager\\.com|adform\\.net|smartadserver\\.com|openx\\.net|criteo\\.com|pubmatic\\.com).*",
@@ -468,6 +495,114 @@ class BRWSRProvider with ChangeNotifier {
         ),
       ),
     ];
+
+    if (customDomains != null && customDomains.trim().isNotEmpty) {
+      final domains = customDomains
+          .split(RegExp(r'[,\n\s]+'))
+          .map((d) => d.trim())
+          .where((d) => d.isNotEmpty)
+          .map((d) => RegExp.escape(d))
+          .join('|');
+      if (domains.isNotEmpty) {
+        rules.add(
+          ContentBlocker(
+            trigger: ContentBlockerTrigger(
+              urlFilter: ".*($domains).*",
+              resourceType: [
+                ContentBlockerTriggerResourceType.SCRIPT,
+                ContentBlockerTriggerResourceType.IMAGE,
+                ContentBlockerTriggerResourceType.RAW,
+                ContentBlockerTriggerResourceType.SVG_DOCUMENT,
+                ContentBlockerTriggerResourceType.STYLE_SHEET,
+              ],
+            ),
+            action: ContentBlockerAction(
+              type: ContentBlockerActionType.BLOCK,
+            ),
+          ),
+        );
+      }
+    }
+
+    return rules;
+  }
+
+  // --- Google Drive Shared Folder & File Extractor ---
+  Future<List<GDriveItem>> extractGoogleDriveFolder(
+      String url, InAppWebViewController? controller) async {
+    final items = <GDriveItem>[];
+    final seenIds = <String>{};
+
+    // Attempt 1: JS Evaluation in WebView DOM
+    if (controller != null) {
+      try {
+        final jsCode = '''
+          (function() {
+            var results = [];
+            var els = document.querySelectorAll('div[data-id], a[href*="/file/d/"], div[role="row"]');
+            els.forEach(function(el) {
+              var id = el.getAttribute('data-id') || '';
+              var href = el.getAttribute('href') || '';
+              var text = el.innerText || el.getAttribute('aria-label') || '';
+              if (!id && href.includes('/file/d/')) {
+                var m = href.match(/\\/file\\/d\\/([^\\/\\?]+)/);
+                if (m) id = m[1];
+              }
+              if (id && id.length > 10) {
+                var name = text.split('\\n')[0].trim();
+                if (!name || name.length < 2) name = 'Google_Drive_File_' + id.substring(0, 6);
+                results.push({id: id, name: name});
+              }
+            });
+            return JSON.stringify(results);
+          })()
+        ''';
+        final res = await controller.evaluateJavascript(source: jsCode);
+        if (res != null) {
+          final List<dynamic> list = jsonDecode(res.toString());
+          for (var obj in list) {
+            final id = obj['id'].toString();
+            final name = obj['name'].toString();
+            if (seenIds.add(id)) {
+              items.add(GDriveItem(
+                id: id,
+                name: name,
+                downloadUrl: 'https://drive.google.com/uc?export=download&id=$id',
+              ));
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('JS GDrive Extraction error: $e');
+      }
+    }
+
+    // Attempt 2: Direct HTTP parse fallback if items empty
+    if (items.isEmpty) {
+      try {
+        final dio = Dio();
+        final response = await dio.get(url);
+        final html = response.data.toString();
+
+        // Match all file IDs in HTML source
+        final reg = RegExp(r'\/file\/d\/([a-zA-Z0-9_-]{25,})|data-id="([a-zA-Z0-9_-]{25,})"');
+        final matches = reg.allMatches(html);
+        for (var m in matches) {
+          final id = m.group(1) ?? m.group(2);
+          if (id != null && seenIds.add(id)) {
+            items.add(GDriveItem(
+              id: id,
+              name: 'Google_Drive_File_${id.substring(0, 6)}',
+              downloadUrl: 'https://drive.google.com/uc?export=download&id=$id',
+            ));
+          }
+        }
+      } catch (e) {
+        debugPrint('HTTP GDrive parse fallback error: $e');
+      }
+    }
+
+    return items;
   }
 
   // --- Find In Page ---
