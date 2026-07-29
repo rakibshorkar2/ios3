@@ -457,6 +457,25 @@ class SettingsTab extends StatelessWidget {
               const SizedBox(height: 16),
               _buildGlassSection(
                 context,
+                'BRWSR TAB SETTINGS',
+                [
+                  _buildGlassSwitchTile(
+                    title: 'Live Activity (Dynamic Island)',
+                    subtitle: 'Show BRWSR web progress on Dynamic Island / Lock Screen',
+                    value: appState.brwsrLiveActivityEnabled,
+                    onChanged: (val) => appState.setBrwsrLiveActivityEnabled(val),
+                  ),
+                  _buildGlassSwitchTile(
+                    title: 'Background Keep-Alive Service',
+                    subtitle: 'Keep BRWSR active in background via silent audio & location',
+                    value: appState.brwsrBackgroundServiceEnabled,
+                    onChanged: (val) => appState.setBrwsrBackgroundServiceEnabled(val),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildGlassSection(
+                context,
                 'ABOUT',
                 [
                   _buildGlassTile(

@@ -51,6 +51,11 @@ class AppState with ChangeNotifier {
   // Auto-categorization
   bool _autoCategorizeEnabled = true;
 
+  // BRWSR Settings
+  bool _brwsrLiveActivityEnabled = true;
+  bool _brwsrBackgroundServiceEnabled = false;
+
+
   ThemeMode get themeMode => _themeMode;
   String get defaultSavePath => _defaultSavePath;
   int get maxConcurrentDownloads => _maxConcurrentDownloads;
@@ -91,6 +96,10 @@ class AppState with ChangeNotifier {
 
   // Auto-categorize
   bool get autoCategorizeEnabled => _autoCategorizeEnabled;
+
+  // BRWSR Settings Getters
+  bool get brwsrLiveActivityEnabled => _brwsrLiveActivityEnabled;
+  bool get brwsrBackgroundServiceEnabled => _brwsrBackgroundServiceEnabled;
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -156,6 +165,9 @@ class AppState with ChangeNotifier {
     _schedulerWifiOnly = prefs.getBool('schedulerWifiOnly') ?? false;
     _schedulerChargingOnly = prefs.getBool('schedulerChargingOnly') ?? false;
     _autoCategorizeEnabled = prefs.getBool('autoCategorizeEnabled') ?? true;
+
+    _brwsrLiveActivityEnabled = prefs.getBool('brwsrLiveActivityEnabled') ?? true;
+    _brwsrBackgroundServiceEnabled = prefs.getBool('brwsrBackgroundServiceEnabled') ?? false;
 
     // Load App Version
     final info = await PackageInfo.fromPlatform();
@@ -430,4 +442,41 @@ class AppState with ChangeNotifier {
     await prefs.setBool('autoCategorizeEnabled', val);
   }
 
+  Future<void> setBrwsrLiveActivityEnabled(bool enabled) async {
+    _brwsrLiveActivityEnabled = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('brwsrLiveActivityEnabled', enabled);
+    if (Platform.isIOS) {
+      try {
+        const liveChannel = MethodChannel('com.dirxplore/live_activity');
+        if (enabled) {
+          await liveChannel.invokeMethod('enable');
+        } else {
+          await liveChannel.invokeMethod('disable');
+        }
+      } catch (e) {
+        debugPrint('LiveActivity toggle error: $e');
+      }
+    }
+  }
+
+  Future<void> setBrwsrBackgroundServiceEnabled(bool enabled) async {
+    _brwsrBackgroundServiceEnabled = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('brwsrBackgroundServiceEnabled', enabled);
+    if (Platform.isIOS) {
+      try {
+        const bgChannel = MethodChannel('com.dirxplore/background_services');
+        if (enabled) {
+          await bgChannel.invokeMethod('startBackgroundServices');
+        } else {
+          await bgChannel.invokeMethod('stopBackgroundServices');
+        }
+      } catch (e) {
+        debugPrint('BackgroundService toggle error: $e');
+      }
+    }
+  }
 }

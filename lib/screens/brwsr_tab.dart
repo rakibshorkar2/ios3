@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'dart:io' show Platform;
 import '../providers/brwsr_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
@@ -15,10 +16,13 @@ class BRWSRTab extends StatefulWidget {
   State<BRWSRTab> createState() => _BRWSRTabState();
 }
 
-class _BRWSRTabState extends State<BRWSRTab> {
+class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin {
   late TextEditingController _urlController;
   final FocusNode _urlFocusNode = FocusNode();
   final TextEditingController _findController = TextEditingController();
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -88,9 +92,29 @@ class _BRWSRTabState extends State<BRWSRTab> {
     }
   }
 
+  void _updateDynamicIslandProgress(AppState appState, String title, double progress) {
+    if (Platform.isIOS && appState.brwsrLiveActivityEnabled) {
+      try {
+        const MethodChannel('com.dirxplore/live_activity').invokeMethod(
+          'updateActiveDownloads',
+          {
+            'count': 1,
+            'primary': {
+              'title': 'BRWSR: $title',
+              'progress': progress,
+              'speed': 0.0,
+            }
+          },
+        );
+      } catch (_) {}
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final provider = context.watch<BRWSRProvider>();
+    final appState = context.watch<AppState>();
     final activeTab = provider.activeTab;
 
     if (activeTab != null && !_urlFocusNode.hasFocus) {
@@ -161,7 +185,7 @@ class _BRWSRTabState extends State<BRWSRTab> {
                       children: provider.tabs.asMap().entries.map((entry) {
                         final index = entry.key;
                         final tab = entry.value;
-                        return _buildWebViewForTab(context, provider, tab, index);
+                        return _buildWebViewForTab(context, provider, appState, tab, index);
                       }).toList(),
                     ),
             ),
@@ -236,7 +260,7 @@ class _BRWSRTabState extends State<BRWSRTab> {
   }
 
   Widget _buildWebViewForTab(
-      BuildContext context, BRWSRProvider provider, BRWSRTabData tab, int index) {
+      BuildContext context, BRWSRProvider provider, AppState appState, BRWSRTabData tab, int index) {
     if (tab.errorMessage != null) {
       return Center(
         child: Padding(
@@ -275,6 +299,7 @@ class _BRWSRTabState extends State<BRWSRTab> {
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     return InAppWebView(
+      key: ValueKey('brwsr_tab_${tab.id}'),
       initialUrlRequest: URLRequest(url: WebUri(tab.url)),
       findInteractionController: tab.findController,
       initialSettings: InAppWebViewSettings(
@@ -282,6 +307,8 @@ class _BRWSRTabState extends State<BRWSRTab> {
         mediaPlaybackRequiresUserGesture: false,
         allowsInlineMediaPlayback: true,
         javaScriptEnabled: true,
+        domStorageEnabled: true,
+        databaseEnabled: true,
         incognito: tab.isIncognito,
         cacheEnabled: !tab.isIncognito,
         contentBlockers: provider.getAdBlockerRules(),
@@ -294,9 +321,13 @@ class _BRWSRTabState extends State<BRWSRTab> {
       onWebViewCreated: (controller) {
         provider.setTabController(index, controller);
       },
+      shouldOverrideUrlLoading: (controller, navigationAction) async {
+        return NavigationActionPolicy.ALLOW;
+      },
       onLoadStart: (controller, url) {
         if (url != null && index == provider.activeTabIndex) {
           provider.updateActiveTabUrl(url.toString());
+          _updateDynamicIslandProgress(appState, tab.title, 0.1);
         }
       },
       onLoadStop: (controller, url) async {
@@ -313,11 +344,14 @@ class _BRWSRTabState extends State<BRWSRTab> {
           );
 
           provider.recordHistory(url.toString(), title);
+          _updateDynamicIslandProgress(appState, title, 1.0);
         }
       },
       onProgressChanged: (controller, progress) {
         if (index == provider.activeTabIndex) {
-          provider.updateActiveTabProgress(progress / 100.0);
+          final p = progress / 100.0;
+          provider.updateActiveTabProgress(p);
+          _updateDynamicIslandProgress(appState, tab.title, p);
         }
       },
       onTitleChanged: (controller, title) {

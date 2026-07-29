@@ -142,7 +142,7 @@ class BRWSRProvider with ChangeNotifier {
       _tabs.add(BRWSRTabData(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         url: 'https://www.google.com',
-        title: 'New Tab',
+        title: 'Google',
       ));
       _activeTabIndex = 0;
     }
@@ -385,6 +385,13 @@ class BRWSRProvider with ChangeNotifier {
       ContentBlocker(
         trigger: ContentBlockerTrigger(
           urlFilter: ".*(doubleclick\\.net|googlesyndication\\.com|adservice\\.google\\.com|pagead2|adsystem|adnxs\\.com|popads\\.net|taboola\\.com|outbrain\\.com|rubiconproject\\.com|scorecardresearch\\.com|analytics\\.google\\.com|googletagmanager\\.com|adform\\.net|smartadserver\\.com|openx\\.net|criteo\\.com|pubmatic\\.com).*",
+          resourceType: [
+            ContentBlockerTriggerResourceType.SCRIPT,
+            ContentBlockerTriggerResourceType.IMAGE,
+            ContentBlockerTriggerResourceType.RAW,
+            ContentBlockerTriggerResourceType.SVG_DOCUMENT,
+            ContentBlockerTriggerResourceType.STYLE_SHEET,
+          ],
         ),
         action: ContentBlockerAction(
           type: ContentBlockerActionType.BLOCK,

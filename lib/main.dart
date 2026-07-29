@@ -269,8 +269,12 @@ class _MainLayoutState extends State<MainLayout> {
         Navigator.pop(context);
         SystemNavigator.pop();
       },
-      child: CupertinoTabScaffold(
-        tabBar: CupertinoTabBar(
+      child: Scaffold(
+        body: IndexedStack(
+          index: _currentIndex,
+          children: _tabs,
+        ),
+        bottomNavigationBar: CupertinoTabBar(
           currentIndex: _currentIndex,
           onTap: (index) {
             HapticService.light();
@@ -287,11 +291,6 @@ class _MainLayoutState extends State<MainLayout> {
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
           ],
         ),
-        tabBuilder: (context, index) {
-          return CupertinoTabView(
-            builder: (context) => _tabs[index],
-          );
-        },
       ),
     );
   }
