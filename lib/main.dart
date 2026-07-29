@@ -18,13 +18,16 @@ import 'screens/browser_tab.dart';
 import 'screens/download_tab.dart';
 import 'screens/proxy_tab.dart';
 import 'screens/settings_tab.dart';
-import 'screens/clipboard_tab.dart';
+import 'screens/brwsr_tab.dart';
+
 
 import 'providers/app_state.dart';
 import 'providers/proxy_provider.dart';
 import 'providers/download_provider.dart';
 import 'providers/browser_provider.dart';
 import 'providers/clipboard_provider.dart';
+import 'providers/brwsr_provider.dart';
+
 import 'services/proxy_tunnel.dart';
 import 'services/haptic_service.dart';
 
@@ -94,6 +97,7 @@ void main() async {
         ChangeNotifierProvider.value(value: dlProvider),
         ChangeNotifierProvider.value(value: clipboardProvider),
         ChangeNotifierProvider(create: (_) => BrowserProvider()),
+        ChangeNotifierProvider(create: (_) => BRWSRProvider()),
       ],
       child: const OpenDirAppWrapper(),
     ),
@@ -233,7 +237,7 @@ class _MainLayoutState extends State<MainLayout> {
     const BrowserTab(),
     const DownloadTab(),
     const ProxyTab(),
-    const ClipboardTab(),
+    const BRWSRTab(),
     const SettingsTab(),
   ];
 
@@ -279,7 +283,7 @@ class _MainLayoutState extends State<MainLayout> {
             BottomNavigationBarItem(icon: Icon(Icons.explore), label: 'Browser'),
             BottomNavigationBarItem(icon: Icon(Icons.download), label: 'Downloads'),
             BottomNavigationBarItem(icon: Icon(Icons.security), label: 'Proxy'),
-            BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: 'Clipboard'),
+            BottomNavigationBarItem(icon: Icon(Icons.language), label: 'BRWSR'),
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
           ],
         ),
