@@ -93,19 +93,24 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
   }
 
   void _updateDynamicIslandProgress(AppState appState, String title, double progress) {
-    if (Platform.isIOS && appState.brwsrLiveActivityEnabled) {
+    if (Platform.isIOS) {
       try {
-        const MethodChannel('com.dirxplore/live_activity').invokeMethod(
-          'updateActiveDownloads',
-          {
-            'count': 1,
-            'primary': {
-              'title': 'BRWSR: $title',
-              'progress': progress,
-              'speed': 0.0,
-            }
-          },
-        );
+        const liveChannel = MethodChannel('com.dirxplore/live_activity');
+        if (appState.brwsrLiveActivityEnabled) {
+          liveChannel.invokeMethod(
+            'updateActiveDownloads',
+            {
+              'count': 1,
+              'primary': {
+                'title': 'BRWSR: $title',
+                'progress': progress,
+                'speed': 0.0,
+              }
+            },
+          );
+        } else {
+          liveChannel.invokeMethod('disable');
+        }
       } catch (_) {}
     }
   }

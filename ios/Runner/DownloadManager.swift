@@ -403,7 +403,6 @@ class DownloadManager: NSObject {
 
     @available(iOS 16.2, *)
     func endAllLiveActivities() {
-        guard liveActivityEnabled else { return }
         for (downloadId, activity) in liveActivities {
             Task {
                 await activity.end(dismissalPolicy: .immediate)

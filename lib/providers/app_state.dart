@@ -169,6 +169,21 @@ class AppState with ChangeNotifier {
     _brwsrLiveActivityEnabled = prefs.getBool('brwsrLiveActivityEnabled') ?? true;
     _brwsrBackgroundServiceEnabled = prefs.getBool('brwsrBackgroundServiceEnabled') ?? false;
 
+    if (Platform.isIOS) {
+      try {
+        const liveChannel = MethodChannel('com.dirxplore/live_activity');
+        const bgChannel = MethodChannel('com.dirxplore/background_services');
+        if (!_brwsrLiveActivityEnabled) {
+          await liveChannel.invokeMethod('disable');
+        }
+        if (!_brwsrBackgroundServiceEnabled) {
+          await bgChannel.invokeMethod('stopBackgroundServices');
+        }
+      } catch (e) {
+        debugPrint('Init channels sync error: $e');
+      }
+    }
+
     // Load App Version
     final info = await PackageInfo.fromPlatform();
     _appVersion = info.version;

@@ -35,6 +35,22 @@ class BRWSRTabData {
     this.faviconUrl,
     this.errorMessage,
   }) : findController = findController ?? FindInteractionController();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'url': url,
+        'title': title,
+        'isIncognito': isIncognito,
+        'isDesktopMode': isDesktopMode,
+      };
+
+  factory BRWSRTabData.fromJson(Map<String, dynamic> json) => BRWSRTabData(
+        id: json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        url: json['url'] ?? 'https://www.google.com',
+        title: json['title'] ?? 'New Tab',
+        isIncognito: json['isIncognito'] ?? false,
+        isDesktopMode: json['isDesktopMode'] ?? false,
+      );
 }
 
 class BRWSRBookmarkItem {
@@ -112,7 +128,7 @@ class BRWSRProvider with ChangeNotifier {
   int _totalMatches = 0;
 
   BRWSRProvider() {
-    _initDefaultTab();
+    _loadOpenTabs();
     _loadBookmarks();
     _loadHistory();
     _loadAdBlockerState();
@@ -148,6 +164,40 @@ class BRWSRProvider with ChangeNotifier {
     }
   }
 
+  // --- Open Tabs Persistence ---
+  Future<void> _loadOpenTabs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = prefs.getString('brwsr_open_tabs_v2');
+      final idx = prefs.getInt('brwsr_active_index_v2') ?? 0;
+      if (str != null) {
+        final List<dynamic> list = jsonDecode(str);
+        if (list.isNotEmpty) {
+          _tabs.clear();
+          _tabs.addAll(list.map((e) => BRWSRTabData.fromJson(e)).toList());
+          _activeTabIndex = (idx >= 0 && idx < _tabs.length) ? idx : 0;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading open tabs: $e');
+    }
+    if (_tabs.isEmpty) {
+      _initDefaultTab();
+    }
+    notifyListeners();
+  }
+
+  Future<void> saveOpenTabs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = jsonEncode(_tabs.map((t) => t.toJson()).toList());
+      await prefs.setString('brwsr_open_tabs_v2', str);
+      await prefs.setInt('brwsr_active_index_v2', _activeTabIndex);
+    } catch (e) {
+      debugPrint('Error saving open tabs: $e');
+    }
+  }
+
   // --- Tab Management ---
   void addNewTab({String? url, bool isIncognito = false}) {
     final newTab = BRWSRTabData(
@@ -158,6 +208,7 @@ class BRWSRProvider with ChangeNotifier {
     );
     _tabs.add(newTab);
     _activeTabIndex = _tabs.length - 1;
+    saveOpenTabs();
     notifyListeners();
   }
 
@@ -169,12 +220,14 @@ class BRWSRProvider with ChangeNotifier {
     } else if (_activeTabIndex >= _tabs.length) {
       _activeTabIndex = _tabs.length - 1;
     }
+    saveOpenTabs();
     notifyListeners();
   }
 
   void switchTab(int index) {
     if (index >= 0 && index < _tabs.length) {
       _activeTabIndex = index;
+      saveOpenTabs();
       notifyListeners();
     }
   }
@@ -183,6 +236,7 @@ class BRWSRProvider with ChangeNotifier {
     if (activeTab != null) {
       activeTab!.url = newUrl;
       activeTab!.errorMessage = null;
+      saveOpenTabs();
       notifyListeners();
     }
   }
@@ -190,6 +244,7 @@ class BRWSRProvider with ChangeNotifier {
   void updateActiveTabTitle(String title) {
     if (activeTab != null && title.isNotEmpty) {
       activeTab!.title = title;
+      saveOpenTabs();
       notifyListeners();
     }
   }
@@ -227,6 +282,7 @@ class BRWSRProvider with ChangeNotifier {
     if (activeTab != null) {
       activeTab!.isDesktopMode = !activeTab!.isDesktopMode;
       activeTab!.controller?.reload();
+      saveOpenTabs();
       notifyListeners();
     }
   }
