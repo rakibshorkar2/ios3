@@ -525,24 +525,23 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         provider.setTabController(index, controller);
         controller.addJavaScriptHandler(
           handlerName: 'gdriveDownloadFiles',
-          callback: (args) {
-            if (args.isNotEmpty && mounted) {
-              final files = args.map((f) => Map<String, String>.from(f)).toList();
-              final nonFolders = files.where((f) => f['isFolder'] != 'true').toList();
-              final folders = files.where((f) => f['isFolder'] == 'true').toList();
-              if (nonFolders.isNotEmpty) {
-                _downloadGDriveFiles(context, nonFolders);
-              }
-              for (final folder in folders) {
-                final folderId = folder['id'];
-                if (folderId != null && folderId.isNotEmpty) {
-                  final folderUrl = 'https://drive.google.com/drive/folders/$folderId';
-                  final name = folder['name'] ?? 'Folder';
-                  provider.addNewTab(url: folderUrl);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Opened folder: $name in new tab')),
-                  );
-                }
+          callback: (handlerArgs) {
+            if (handlerArgs.isEmpty || !mounted) return;
+            final raw = handlerArgs[0];
+            if (raw is! List || raw.isEmpty) return;
+            final files = [for (final f in raw) Map<String, String>.from(f)];
+            final nonFolders = files.where((f) => f['isFolder'] != 'true').toList();
+            final folders = files.where((f) => f['isFolder'] == 'true').toList();
+            if (nonFolders.isNotEmpty) {
+              _downloadGDriveFiles(context, nonFolders);
+            }
+            for (final folder in folders) {
+              final folderId = folder['id'];
+              if (folderId != null && folderId.isNotEmpty) {
+                provider.addNewTab(url: 'https://drive.google.com/drive/folders/$folderId');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Opened folder: ${folder['name'] ?? 'Folder'} in new tab')),
+                );
               }
             }
           },
