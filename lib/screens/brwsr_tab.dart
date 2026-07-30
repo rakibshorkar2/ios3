@@ -739,6 +739,7 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         appState.defaultSavePath,
         originalUrl: 'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t&authuser=0',
         customHeaders: Map<String, String>.from(headers),
+        skipHeadRequest: true,
       );
       added++;
     }
