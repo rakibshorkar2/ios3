@@ -422,11 +422,27 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
               Navigator.pop(ctx);
               final appState = ctx.read<AppState>();
               final dlProvider = ctx.read<DownloadProvider>();
+
+              Map<String, String>? customHeaders;
+              if (url.contains('drive.usercontent.google.com') || url.contains('drive.google.com')) {
+                try {
+                  final cookies = CookieManager.instance().getCookies(url: WebUri.uri(Uri.parse(url)));
+                  final allCookies = await cookies;
+                  if (allCookies.isNotEmpty) {
+                    final cookieStr = allCookies.map((c) => '${c.name}=${c.value}').join('; ');
+                    customHeaders = {'Cookie': cookieStr};
+                  }
+                } catch (e) {
+                  debugPrint('Error getting Google Drive cookies: $e');
+                }
+              }
+
               await dlProvider.addDownload(
                 url,
                 filename,
                 appState.defaultSavePath,
                 originalUrl: url,
+                customHeaders: customHeaders,
               );
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
