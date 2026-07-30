@@ -127,6 +127,11 @@ class BRWSRProvider with ChangeNotifier {
   int _currentMatchIndex = 0;
   int _totalMatches = 0;
 
+  // GDrive multi-file selection state
+  bool _isGDrive = false;
+  bool _gdriveSelectionMode = false;
+  List<Map<String, String>> _gdriveSelectedFiles = [];
+
   BRWSRProvider() {
     _loadOpenTabs();
     _loadBookmarks();
@@ -152,6 +157,51 @@ class BRWSRProvider with ChangeNotifier {
   String get findQuery => _findQuery;
   int get currentMatchIndex => _currentMatchIndex;
   int get totalMatches => _totalMatches;
+
+  bool get isGDrive => _isGDrive;
+  bool get gdriveSelectionMode => _gdriveSelectionMode;
+  List<Map<String, String>> get gdriveSelectedFiles =>
+      List.unmodifiable(_gdriveSelectedFiles);
+  int get gdriveSelectedCount => _gdriveSelectedFiles.length;
+
+  void setGDrivePage(bool value) {
+    _isGDrive = value;
+    if (!value) {
+      _gdriveSelectionMode = false;
+      _gdriveSelectedFiles.clear();
+    }
+    notifyListeners();
+  }
+
+  void toggleGDriveFile(String id, String name, bool isFolder) {
+    final idx = _gdriveSelectedFiles.indexWhere((f) => f['id'] == id);
+    if (idx >= 0) {
+      _gdriveSelectedFiles.removeAt(idx);
+      if (_gdriveSelectedFiles.isEmpty) {
+        _gdriveSelectionMode = false;
+      }
+    } else {
+      _gdriveSelectedFiles.add({
+        'id': id,
+        'name': name,
+        'isFolder': isFolder.toString(),
+      });
+      _gdriveSelectionMode = true;
+    }
+    notifyListeners();
+  }
+
+  void clearGDriveSelection() {
+    _gdriveSelectedFiles.clear();
+    _gdriveSelectionMode = false;
+    notifyListeners();
+  }
+
+  void selectAllGDriveFiles(List<Map<String, String>> files) {
+    _gdriveSelectedFiles = List.from(files);
+    _gdriveSelectionMode = _gdriveSelectedFiles.isNotEmpty;
+    notifyListeners();
+  }
 
   void _initDefaultTab() {
     if (_tabs.isEmpty) {

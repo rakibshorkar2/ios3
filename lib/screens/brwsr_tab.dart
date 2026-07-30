@@ -9,6 +9,169 @@ import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
 import '../services/haptic_service.dart';
 
+const String _gdriveSelectionScript = r'''
+(function() {
+  if (window.__gdriveInjected) return;
+  window.__gdriveInjected = true;
+
+  let selectionBar = null;
+  let btnDownloadSelected = null;
+  let btnDownloadAll = null;
+  let selectionCount = null;
+  let selectedIds = new Set();
+  let allItems = [];
+
+  function findFileRows() {
+    const rows = document.querySelectorAll('[data-id]');
+    return Array.from(rows).filter(el => {
+      const id = el.getAttribute('data-id');
+      return id && id.length > 10;
+    });
+  }
+
+  function getFileName(row) {
+    const tooltip = row.querySelector('[data-tooltip]');
+    if (tooltip) return tooltip.getAttribute('data-tooltip') || tooltip.textContent.trim();
+    const ariaLabel = row.getAttribute('aria-label');
+    if (ariaLabel) return ariaLabel.split(',')[0].trim();
+    const textEl = row.querySelector('[role="gridcell"] [dir="ltr"], [role="gridcell"] span');
+    if (textEl) return textEl.textContent.trim();
+    const allText = row.textContent.trim();
+    return allText.substring(0, 80) || 'Unknown';
+  }
+
+  function isFolderRow(row) {
+    const cls = row.getAttribute('class') || '';
+    const html = row.innerHTML.toLowerCase();
+    return cls.includes('folder') || html.includes('folder') || html.includes('mimetype:application/vnd.google-apps.folder');
+  }
+
+  function getFileId(row) {
+    return row.getAttribute('data-id');
+  }
+
+  function scanPage() {
+    const rows = findFileRows();
+    allItems = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const id = getFileId(row);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      allItems.push({
+        id: id,
+        name: getFileName(row),
+        isFolder: isFolderRow(row),
+        element: row
+      });
+    }
+  }
+
+  function updateRowStyle(row, selected) {
+    row.style.outline = selected ? '3px solid #1a73e8' : '';
+    row.style.outlineOffset = selected ? '-3px' : '';
+    row.style.backgroundColor = selected ? 'rgba(26,115,232,0.08)' : '';
+  }
+
+  function toggleFile(item) {
+    if (selectedIds.has(item.id)) {
+      selectedIds.delete(item.id);
+      updateRowStyle(item.element, false);
+    } else {
+      selectedIds.add(item.id);
+      updateRowStyle(item.element, true);
+    }
+    updateSelectionBar();
+  }
+
+  function updateSelectionBar() {
+    if (!selectionBar) return;
+    const count = selectedIds.size;
+    selectionBar.style.display = count > 0 ? 'flex' : 'none';
+    if (selectionCount) selectionCount.textContent = count + ' selected';
+  }
+
+  function addRowClickHandlers() {
+    for (const item of allItems) {
+      const row = item.element;
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('a, button, input, [role="button"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFile(item);
+      });
+    }
+  }
+
+  function buildSelectionBar() {
+    if (document.getElementById('__gdrive_bar')) return;
+    selectionBar = document.createElement('div');
+    selectionBar.id = '__gdrive_bar';
+    selectionBar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;background:#1a73e8;color:#fff;display:none;align-items:center;justify-content:space-between;padding:10px 16px;font-family:system-ui,sans-serif;font-size:14px;box-shadow:0 -2px 10px rgba(0,0,0,0.3);';
+
+    selectionCount = document.createElement('span');
+    selectionCount.textContent = '0 selected';
+    selectionBar.appendChild(selectionCount);
+
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display:flex;gap:8px;';
+
+    btnDownloadSelected = document.createElement('button');
+    btnDownloadSelected.textContent = 'Download Selected';
+    btnDownloadSelected.style.cssText = 'background:#fff;color:#1a73e8;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;';
+    btnDownloadSelected.addEventListener('click', function() {
+      const files = allItems.filter(i => selectedIds.has(i.id) && !i.isFolder);
+      const folders = allItems.filter(i => selectedIds.has(i.id) && i.isFolder);
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('gdriveDownloadFiles', files.map(f => ({id: f.id, name: f.name})));
+        if (folders.length > 0) {
+          window.flutter_inappwebview.callHandler('gdriveDownloadFiles', folders.map(f => ({id: f.id, name: f.name, isFolder: 'true'})));
+        }
+      }
+    });
+    btnGroup.appendChild(btnDownloadSelected);
+
+    btnDownloadAll = document.createElement('button');
+    btnDownloadAll.textContent = 'Download All';
+    btnDownloadAll.style.cssText = 'background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.5);padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;';
+    btnDownloadAll.addEventListener('click', function() {
+      const files = allItems.filter(i => !i.isFolder);
+      const folders = allItems.filter(i => i.isFolder);
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('gdriveDownloadFiles', files.map(f => ({id: f.id, name: f.name})));
+        if (folders.length > 0) {
+          window.flutter_inappwebview.callHandler('gdriveDownloadFiles', folders.map(f => ({id: f.id, name: f.name, isFolder: 'true'})));
+        }
+      }
+    });
+    btnGroup.appendChild(btnDownloadAll);
+
+    selectionBar.appendChild(btnGroup);
+    document.body.appendChild(selectionBar);
+  }
+
+  function init() {
+    const check = setInterval(function() {
+      const rows = findFileRows();
+      if (rows.length > 0) {
+        clearInterval(check);
+        scanPage();
+        buildSelectionBar();
+        addRowClickHandlers();
+      }
+    }, 800);
+    setTimeout(function() { clearInterval(check); }, 20000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+''';
+
 class BRWSRTab extends StatefulWidget {
   const BRWSRTab({super.key});
 
@@ -199,6 +362,10 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
             if (provider.isFindInPageActive)
               _buildFindInPageBar(context, provider),
 
+            // GDrive Multi-Selection Bar
+            if (provider.isGDrive && provider.gdriveSelectedCount > 0)
+              _buildGDriveSelectionBar(context, provider),
+
             // Bottom Navigation Toolbar
             _buildBottomToolbar(context, provider, activeTab),
           ],
@@ -325,6 +492,30 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
       ),
       onWebViewCreated: (controller) {
         provider.setTabController(index, controller);
+        controller.addJavaScriptHandler(
+          handlerName: 'gdriveDownloadFiles',
+          callback: (args) {
+            if (args.isNotEmpty && mounted) {
+              final files = args.map((f) => Map<String, String>.from(f)).toList();
+              final nonFolders = files.where((f) => f['isFolder'] != 'true').toList();
+              final folders = files.where((f) => f['isFolder'] == 'true').toList();
+              if (nonFolders.isNotEmpty) {
+                _downloadGDriveFiles(context, nonFolders);
+              }
+              for (final folder in folders) {
+                final folderId = folder['id'];
+                if (folderId != null && folderId.isNotEmpty) {
+                  final folderUrl = 'https://drive.google.com/drive/folders/$folderId';
+                  final name = folder['name'] ?? 'Folder';
+                  provider.addNewTab(url: folderUrl);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Opened folder: $name in new tab')),
+                  );
+                }
+              }
+            }
+          },
+        );
       },
       shouldOverrideUrlLoading: (controller, navigationAction) async {
         return NavigationActionPolicy.ALLOW;
@@ -333,6 +524,10 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         if (url != null && index == provider.activeTabIndex) {
           provider.updateActiveTabUrl(url.toString());
           _updateDynamicIslandProgress(appState, tab.title, 0.1);
+          final urlStr = url.toString();
+          if (!urlStr.contains('drive.google.com')) {
+            provider.setGDrivePage(false);
+          }
         }
       },
       onLoadStop: (controller, url) async {
@@ -350,6 +545,14 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
 
           provider.recordHistory(url.toString(), title);
           _updateDynamicIslandProgress(appState, title, 1.0);
+
+          final urlStr = url.toString();
+          if (urlStr.contains('drive.google.com') && urlStr.contains('/folders/')) {
+            provider.setGDrivePage(true);
+            controller.evaluateJavascript(source: _gdriveSelectionScript);
+          } else if (!urlStr.contains('drive.google.com')) {
+            provider.setGDrivePage(false);
+          }
         }
       },
       onProgressChanged: (controller, progress) {
@@ -459,6 +662,52 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     );
   }
 
+  Future<void> _downloadGDriveFiles(
+      BuildContext ctx, List<Map<String, String>> files) async {
+    if (files.isEmpty || !mounted) return;
+    final appState = ctx.read<AppState>();
+    final dlProvider = ctx.read<DownloadProvider>();
+    final brwsrProvider = ctx.read<BRWSRProvider>();
+
+    Map<String, String>? cookieHeader;
+    try {
+      final cookies = await CookieManager.instance()
+          .getCookies(url: WebUri.uri(Uri.parse('https://drive.google.com')));
+      if (cookies.isNotEmpty) {
+        final cookieStr =
+            cookies.map((c) => '${c.name}=${c.value}').join('; ');
+        cookieHeader = {'Cookie': cookieStr};
+      }
+    } catch (e) {
+      debugPrint('Error getting GDrive cookies: $e');
+    }
+
+    int added = 0;
+    for (final file in files) {
+      final fileId = file['id'];
+      final name = file['name'] ?? 'Unknown';
+      if (fileId == null || fileId.isEmpty) continue;
+      final downloadUrl =
+          'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t';
+      final filename = name.isNotEmpty ? name : 'file_$fileId';
+      await dlProvider.addDownload(
+        downloadUrl,
+        filename,
+        appState.defaultSavePath,
+        originalUrl: downloadUrl,
+        customHeaders: cookieHeader,
+      );
+      added++;
+    }
+
+    brwsrProvider.clearGDriveSelection();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added $added file(s) to download queue')),
+      );
+    }
+  }
+
   Widget _buildFindInPageBar(BuildContext context, BRWSRProvider provider) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -503,6 +752,59 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
               provider.closeFindInPage();
             },
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGDriveSelectionBar(BuildContext context, BRWSRProvider provider) {
+    final count = provider.gdriveSelectedCount;
+    return Container(
+      height: 48,
+      color: Colors.blue.shade700,
+      child: Row(
+        children: [
+          const SizedBox(width: 12),
+          const Icon(Icons.check_circle, color: Colors.white, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            '$count selected',
+            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: () => provider.clearGDriveSelection(),
+            icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+            label: const Text('Clear', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: () async {
+              final files = provider.gdriveSelectedFiles
+                  .where((f) => f['isFolder'] != 'true')
+                  .toList();
+              final folders = provider.gdriveSelectedFiles
+                  .where((f) => f['isFolder'] == 'true')
+                  .toList();
+              if (files.isNotEmpty) await _downloadGDriveFiles(context, files);
+              for (final folder in folders) {
+                final folderId = folder['id'];
+                final name = folder['name'] ?? 'Folder';
+                if (folderId != null && folderId.isNotEmpty) {
+                  if (mounted) {
+                    provider.addNewTab(url: 'https://drive.google.com/drive/folders/$folderId');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Opened folder: $name in new tab')),
+                    );
+                  }
+                }
+              }
+              provider.clearGDriveSelection();
+            },
+            icon: const Icon(Icons.download, color: Colors.white, size: 18),
+            label: const Text('Download', style: TextStyle(color: Colors.white, fontSize: 13)),
+          ),
+          const SizedBox(width: 8),
         ],
       ),
     );
