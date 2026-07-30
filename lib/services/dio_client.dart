@@ -137,6 +137,101 @@ class DioClient {
     );
   }
 
+  Future<MapEntry<String, Map<String, String>>> resolveWithCookies(
+      String url,
+      {Map<String, String>? initialCookies,
+      int maxRedirects = 20}) async {
+    final visited = <String>{};
+    String currentUrl = url;
+    final cookieJar = <String, String>{};
+    if (initialCookies != null) cookieJar.addAll(initialCookies);
+
+    for (int i = 0; i < maxRedirects; i++) {
+      if (visited.contains(currentUrl)) {
+        throw DioException(
+          requestOptions: RequestOptions(path: currentUrl),
+          message: 'Redirect loop detected',
+        );
+      }
+      visited.add(currentUrl);
+
+      final headers = <String, dynamic>{
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://drive.google.com/',
+      };
+      if (cookieJar.isNotEmpty) {
+        headers['Cookie'] =
+            cookieJar.entries.map((e) => '${e.key}=${e.value}').join('; ');
+      }
+
+      late Response response;
+      bool useGet = false;
+      try {
+        final headResp = await _dio.head(
+          currentUrl,
+          options: Options(
+            followRedirects: false,
+            headers: headers,
+            validateStatus: (status) => true,
+          ),
+        );
+        if ((headResp.statusCode ?? 0) >= 400) {
+          useGet = true;
+        } else {
+          response = headResp;
+        }
+      } on DioException {
+        useGet = true;
+      }
+
+      if (useGet) {
+        response = await _dio.get(
+          currentUrl,
+          options: Options(
+            followRedirects: false,
+            headers: {
+              ...headers,
+              'Range': 'bytes=0-0',
+            },
+            validateStatus: (status) => true,
+            responseType: ResponseType.stream,
+          ),
+        );
+      }
+
+      final setCookie = response.headers.value('set-cookie');
+      if (setCookie != null && setCookie.isNotEmpty) {
+        for (final part in setCookie.split(';')) {
+          final eq = part.indexOf('=');
+          if (eq > 0) {
+            final key = part.substring(0, eq).trim();
+            final value = part.substring(eq + 1).trim();
+            cookieJar[key] = value;
+          }
+        }
+      }
+
+      if (_isRedirect(response.statusCode ?? 0)) {
+        final location = response.headers.value('location');
+        if (location == null || location.isEmpty) {
+          throw DioException(
+            requestOptions: RequestOptions(path: currentUrl),
+            message: 'Redirect response without Location header',
+          );
+        }
+        currentUrl = _resolveUrl(currentUrl, location);
+      } else {
+        return MapEntry(currentUrl, Map.from(cookieJar));
+      }
+    }
+
+    throw DioException(
+      requestOptions: RequestOptions(path: currentUrl),
+      message: 'Exceeded maximum redirect count ($maxRedirects)',
+    );
+  }
+
   bool _isRedirect(int statusCode) {
     return statusCode == 301 ||
         statusCode == 302 ||

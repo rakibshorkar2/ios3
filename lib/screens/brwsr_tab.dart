@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 import '../providers/brwsr_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
+import '../services/dio_client.dart';
 import '../services/haptic_service.dart';
 
 const String _gdriveSelectionScript = r'''
@@ -32,12 +33,27 @@ const String _gdriveSelectionScript = r'''
   }
 
   function getFileName(row) {
-    const tooltip = row.querySelector('[data-tooltip]');
-    if (tooltip) return tooltip.getAttribute('data-tooltip') || tooltip.textContent.trim();
-    const ariaLabel = row.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel.split(',')[0].trim();
-    const textEl = row.querySelector('[role="gridcell"] [dir="ltr"], [role="gridcell"] span');
-    if (textEl) return textEl.textContent.trim();
+    const sel = [
+      '[data-tooltip]',
+      '[original-title]',
+      '[aria-label]',
+      'div[role="gridcell"] > div:first-child',
+      'div[role="gridcell"] span:first-child',
+      'div[role="gridcell"] [dir="ltr"]',
+    ];
+    for (const s of sel) {
+      const el = s === '[aria-label]' ? row : row.querySelector(s);
+      if (!el) continue;
+      if (s === '[aria-label]') {
+        const v = row.getAttribute('aria-label');
+        if (v) return v.split(',')[0].trim();
+      } else if (s === '[data-tooltip]' || s === '[original-title]') {
+        const v = el.getAttribute(s.slice(1, -1));
+        if (v && v.length > 0) return v.trim();
+      }
+      const text = el.textContent.trim();
+      if (text && text.length > 0 && text.length < 200) return text;
+    }
     return 'Unknown';
   }
 
@@ -694,14 +710,12 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     final dlProvider = ctx.read<DownloadProvider>();
     final brwsrProvider = ctx.read<BRWSRProvider>();
 
-    Map<String, String>? cookieHeader;
+    Map<String, String> initialCookies = {};
     try {
       final cookies = await CookieManager.instance()
           .getCookies(url: WebUri.uri(Uri.parse('https://drive.google.com')));
-      if (cookies.isNotEmpty) {
-        final cookieStr =
-            cookies.map((c) => '${c.name}=${c.value}').join('; ');
-        cookieHeader = {'Cookie': cookieStr};
+      for (final c in cookies) {
+        initialCookies[c.name] = c.value;
       }
     } catch (e) {
       debugPrint('Error getting GDrive cookies: $e');
@@ -710,19 +724,48 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     int added = 0;
     for (final file in files) {
       final fileId = file['id'];
-      final name = file['name'] ?? 'Unknown';
+      var name = file['name'] ?? '';
       if (fileId == null || fileId.isEmpty) continue;
-      final downloadUrl =
-          'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t';
-      final filename = name.isNotEmpty ? name : 'file_$fileId';
-      await dlProvider.addDownload(
-        downloadUrl,
-        filename,
-        appState.defaultSavePath,
-        originalUrl: downloadUrl,
-        customHeaders: cookieHeader,
-      );
-      added++;
+
+      if (name.isEmpty || name == 'Unknown') {
+        name = 'gdrive_$fileId';
+      }
+
+      try {
+        final result = await DioClient().resolveWithCookies(
+          'https://drive.google.com/uc?export=download&id=$fileId&confirm=t&authuser=0',
+          initialCookies: initialCookies,
+        );
+        final resolvedUrl = result.key;
+        final collectedCookies = result.value;
+
+        Map<String, String> headers = {
+          'Referer': 'https://drive.google.com/',
+        };
+        if (collectedCookies.isNotEmpty) {
+          headers['Cookie'] =
+              collectedCookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+        }
+
+        await dlProvider.addDownload(
+          resolvedUrl,
+          name,
+          appState.defaultSavePath,
+          originalUrl: resolvedUrl,
+          customHeaders: headers,
+        );
+        added++;
+      } catch (e) {
+        debugPrint('Failed to resolve download for $fileId: $e');
+        await dlProvider.addDownload(
+          'https://drive.google.com/uc?export=download&id=$fileId&confirm=t&authuser=0',
+          name,
+          appState.defaultSavePath,
+          originalUrl: 'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t&authuser=0',
+          customHeaders: {'Referer': 'https://drive.google.com/', 'Accept': '*/*'},
+        );
+        added++;
+      }
     }
 
     brwsrProvider.clearGDriveSelection();
