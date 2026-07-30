@@ -12,14 +12,16 @@ import '../services/haptic_service.dart';
 const String _gdriveSelectionScript = r'''
 (function() {
   if (window.__gdriveInjected) return;
-  window.__gdriveInjected = true;
 
+  let initialized = false;
   let selectionBar = null;
-  let btnDownloadSelected = null;
-  let btnDownloadAll = null;
   let selectionCount = null;
   let selectedIds = new Set();
   let allItems = [];
+  let itemMap = new Map();
+  let observer = null;
+  let urlCheckInterval = null;
+  let lastUrl = window.location.href;
 
   function findFileRows() {
     const rows = document.querySelectorAll('[data-id]');
@@ -36,14 +38,13 @@ const String _gdriveSelectionScript = r'''
     if (ariaLabel) return ariaLabel.split(',')[0].trim();
     const textEl = row.querySelector('[role="gridcell"] [dir="ltr"], [role="gridcell"] span');
     if (textEl) return textEl.textContent.trim();
-    const allText = row.textContent.trim();
-    return allText.substring(0, 80) || 'Unknown';
+    return 'Unknown';
   }
 
   function isFolderRow(row) {
     const cls = row.getAttribute('class') || '';
     const html = row.innerHTML.toLowerCase();
-    return cls.includes('folder') || html.includes('folder') || html.includes('mimetype:application/vnd.google-apps.folder');
+    return cls.includes('folder') || html.includes('folder') || html.includes('application/vnd.google-apps.folder');
   }
 
   function getFileId(row) {
@@ -52,19 +53,41 @@ const String _gdriveSelectionScript = r'''
 
   function scanPage() {
     const rows = findFileRows();
-    allItems = [];
-    const seen = new Set();
+    const currentIds = new Set();
+    const newItems = [];
+
     for (const row of rows) {
       const id = getFileId(row);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      allItems.push({
+      if (!id || currentIds.has(id)) continue;
+      currentIds.add(id);
+
+      if (itemMap.has(id)) continue;
+
+      newItems.push({
         id: id,
         name: getFileName(row),
         isFolder: isFolderRow(row),
         element: row
       });
     }
+
+    for (const item of newItems) {
+      itemMap.set(item.id, item);
+      allItems.push(item);
+      const row = item.element;
+      row.style.cursor = 'pointer';
+      if (selectedIds.has(item.id)) {
+        updateRowStyle(row, true);
+      }
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('a, button, input, [role="button"], [role="link"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFile(item);
+      });
+    }
+
+    return newItems.length > 0;
   }
 
   function updateRowStyle(row, selected) {
@@ -91,19 +114,6 @@ const String _gdriveSelectionScript = r'''
     if (selectionCount) selectionCount.textContent = count + ' selected';
   }
 
-  function addRowClickHandlers() {
-    for (const item of allItems) {
-      const row = item.element;
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', function(e) {
-        if (e.target.closest('a, button, input, [role="button"]')) return;
-        e.preventDefault();
-        e.stopPropagation();
-        toggleFile(item);
-      });
-    }
-  }
-
   function buildSelectionBar() {
     if (document.getElementById('__gdrive_bar')) return;
     selectionBar = document.createElement('div');
@@ -117,7 +127,7 @@ const String _gdriveSelectionScript = r'''
     const btnGroup = document.createElement('div');
     btnGroup.style.cssText = 'display:flex;gap:8px;';
 
-    btnDownloadSelected = document.createElement('button');
+    const btnDownloadSelected = document.createElement('button');
     btnDownloadSelected.textContent = 'Download Selected';
     btnDownloadSelected.style.cssText = 'background:#fff;color:#1a73e8;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;';
     btnDownloadSelected.addEventListener('click', function() {
@@ -132,7 +142,7 @@ const String _gdriveSelectionScript = r'''
     });
     btnGroup.appendChild(btnDownloadSelected);
 
-    btnDownloadAll = document.createElement('button');
+    const btnDownloadAll = document.createElement('button');
     btnDownloadAll.textContent = 'Download All';
     btnDownloadAll.style.cssText = 'background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.5);padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;';
     btnDownloadAll.addEventListener('click', function() {
@@ -151,17 +161,38 @@ const String _gdriveSelectionScript = r'''
     document.body.appendChild(selectionBar);
   }
 
-  function init() {
-    const check = setInterval(function() {
-      const rows = findFileRows();
-      if (rows.length > 0) {
-        clearInterval(check);
-        scanPage();
-        buildSelectionBar();
-        addRowClickHandlers();
+  function startObserver() {
+    if (observer) observer.disconnect();
+    observer = new MutationObserver(function() {
+      scanPage();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function startUrlCheck() {
+    if (urlCheckInterval) clearInterval(urlCheckInterval);
+    urlCheckInterval = setInterval(function() {
+      const currentUrl = window.location.href;
+      if (currentUrl !== lastUrl) {
+        lastUrl = currentUrl;
+        selectedIds.clear();
+        allItems = [];
+        itemMap.clear();
+        init();
       }
-    }, 800);
-    setTimeout(function() { clearInterval(check); }, 20000);
+    }, 1000);
+  }
+
+  function init() {
+    scanPage();
+    if (!initialized) {
+      initialized = true;
+      window.__gdriveInjected = true;
+      buildSelectionBar();
+      startObserver();
+      startUrlCheck();
+    }
+    updateSelectionBar();
   }
 
   if (document.readyState === 'loading') {
@@ -524,35 +555,30 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         if (url != null && index == provider.activeTabIndex) {
           provider.updateActiveTabUrl(url.toString());
           _updateDynamicIslandProgress(appState, tab.title, 0.1);
-          final urlStr = url.toString();
-          if (!urlStr.contains('drive.google.com')) {
-            provider.setGDrivePage(false);
-          }
         }
       },
       onLoadStop: (controller, url) async {
-        if (url != null && index == provider.activeTabIndex) {
-          provider.updateActiveTabUrl(url.toString());
-          final title = await controller.getTitle() ?? url.toString();
-          provider.updateActiveTabTitle(title);
+        if (index != provider.activeTabIndex) return;
+        final mainUrl = (await controller.getUrl())?.toString() ?? url?.toString() ?? '';
+        provider.updateActiveTabUrl(mainUrl);
+        final title = await controller.getTitle() ?? mainUrl;
+        provider.updateActiveTabTitle(title);
 
-          final canGoBack = await controller.canGoBack();
-          final canGoForward = await controller.canGoForward();
-          provider.updateActiveTabNavigationState(
-            canGoBack: canGoBack,
-            canGoForward: canGoForward,
-          );
+        final canGoBack = await controller.canGoBack();
+        final canGoForward = await controller.canGoForward();
+        provider.updateActiveTabNavigationState(
+          canGoBack: canGoBack,
+          canGoForward: canGoForward,
+        );
 
-          provider.recordHistory(url.toString(), title);
-          _updateDynamicIslandProgress(appState, title, 1.0);
+        provider.recordHistory(mainUrl, title);
+        _updateDynamicIslandProgress(appState, title, 1.0);
 
-          final urlStr = url.toString();
-          if (urlStr.contains('drive.google.com') && urlStr.contains('/folders/')) {
-            provider.setGDrivePage(true);
-            controller.evaluateJavascript(source: _gdriveSelectionScript);
-          } else if (!urlStr.contains('drive.google.com')) {
-            provider.setGDrivePage(false);
-          }
+        if (mainUrl.contains('drive.google.com') && mainUrl.contains('/folders/')) {
+          provider.setGDrivePage(true);
+          controller.evaluateJavascript(source: _gdriveSelectionScript);
+        } else if (!mainUrl.contains('drive.google.com')) {
+          provider.setGDrivePage(false);
         }
       },
       onProgressChanged: (controller, progress) {
