@@ -7,7 +7,6 @@ import 'dart:io' show Platform;
 import '../providers/brwsr_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
-import '../services/dio_client.dart';
 import '../services/haptic_service.dart';
 
 const String _gdriveSelectionScript = r'''
@@ -710,12 +709,15 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
     final dlProvider = ctx.read<DownloadProvider>();
     final brwsrProvider = ctx.read<BRWSRProvider>();
 
-    Map<String, String> initialCookies = {};
+    Map<String, String> headers = {
+      'Referer': 'https://drive.google.com/',
+    };
     try {
       final cookies = await CookieManager.instance()
           .getCookies(url: WebUri.uri(Uri.parse('https://drive.google.com')));
-      for (final c in cookies) {
-        initialCookies[c.name] = c.value;
+      if (cookies.isNotEmpty) {
+        headers['Cookie'] =
+            cookies.map((c) => '${c.name}=${c.value}').join('; ');
       }
     } catch (e) {
       debugPrint('Error getting GDrive cookies: $e');
@@ -731,41 +733,14 @@ class _BRWSRTabState extends State<BRWSRTab> with AutomaticKeepAliveClientMixin 
         name = 'gdrive_$fileId';
       }
 
-      try {
-        final result = await DioClient().resolveWithCookies(
-          'https://drive.google.com/uc?export=download&id=$fileId&confirm=t&authuser=0',
-          initialCookies: initialCookies,
-        );
-        final resolvedUrl = result.key;
-        final collectedCookies = result.value;
-
-        Map<String, String> headers = {
-          'Referer': 'https://drive.google.com/',
-        };
-        if (collectedCookies.isNotEmpty) {
-          headers['Cookie'] =
-              collectedCookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
-        }
-
-        await dlProvider.addDownload(
-          resolvedUrl,
-          name,
-          appState.defaultSavePath,
-          originalUrl: resolvedUrl,
-          customHeaders: headers,
-        );
-        added++;
-      } catch (e) {
-        debugPrint('Failed to resolve download for $fileId: $e');
-        await dlProvider.addDownload(
-          'https://drive.google.com/uc?export=download&id=$fileId&confirm=t&authuser=0',
-          name,
-          appState.defaultSavePath,
-          originalUrl: 'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t&authuser=0',
-          customHeaders: {'Referer': 'https://drive.google.com/', 'Accept': '*/*'},
-        );
-        added++;
-      }
+      await dlProvider.addDownload(
+        'https://drive.google.com/uc?export=download&id=$fileId&confirm=t&authuser=0',
+        name,
+        appState.defaultSavePath,
+        originalUrl: 'https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t&authuser=0',
+        customHeaders: Map<String, String>.from(headers),
+      );
+      added++;
     }
 
     brwsrProvider.clearGDriveSelection();
