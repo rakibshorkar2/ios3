@@ -97,9 +97,6 @@ class DownloadItem {
   int redirectCount;
   String? resolvedUrl;
 
-  // Skip HEAD request before GET (needed for GDrive one-time tokens)
-  bool skipHeadRequest;
-
   DownloadItem({
     required this.id,
     required this.url,
@@ -130,7 +127,6 @@ class DownloadItem {
     this.calculatedSha256,
     this.redirectCount = 0,
     this.resolvedUrl,
-    this.skipHeadRequest = false,
   }) : addedAt = addedAt ?? DateTime.now();
 
   double get progress =>
@@ -219,7 +215,6 @@ class DownloadItem {
         calculatedSha256: calculatedSha256,
         redirectCount: redirectCount,
         resolvedUrl: resolvedUrl,
-        skipHeadRequest: skipHeadRequest,
       );
 
   Map<String, dynamic> toJson() => {
@@ -250,7 +245,6 @@ class DownloadItem {
     if (calculatedSha256 != null) 'calculatedSha256': calculatedSha256,
     'redirectCount': redirectCount,
     if (resolvedUrl != null) 'resolvedUrl': resolvedUrl,
-    'skipHeadRequest': skipHeadRequest,
   };
 
   factory DownloadItem.fromJson(Map<String, dynamic> json) {
@@ -282,7 +276,6 @@ class DownloadItem {
       calculatedSha256: json['calculatedSha256'],
       redirectCount: json['redirectCount'] ?? 0,
       resolvedUrl: json['resolvedUrl'],
-      skipHeadRequest: json['skipHeadRequest'] ?? false,
     );
   }
 }

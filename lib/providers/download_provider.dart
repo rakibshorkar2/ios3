@@ -250,8 +250,7 @@ class DownloadProvider with ChangeNotifier {
       String? expectedSha1,
       String? expectedSha256,
       int? redirectCount,
-      String? resolvedUrl,
-      bool skipHeadRequest = false}) async {
+      String? resolvedUrl}) async {
     if (_queue.any((i) => i.url == url)) {
       final existing = _queue.firstWhere((i) => i.url == url);
       if (existing.status == DownloadStatus.paused ||
@@ -318,7 +317,6 @@ class DownloadProvider with ChangeNotifier {
       expectedSha256: expectedSha256,
       redirectCount: redirectCount ?? 0,
       resolvedUrl: resolvedUrl,
-      skipHeadRequest: skipHeadRequest,
     ));
 
     await DatabaseHelper().insertDownload(_queue.last);
@@ -868,53 +866,47 @@ class DownloadProvider with ChangeNotifier {
 
     try {
       final dio = DioClient().dio;
-      if (item.skipHeadRequest) {
-        // Skip HEAD for GDrive one-time tokens; totalBytes will be
-        // extracted from the GET response in _downloadSingle.
-        await _downloadSingle(item, existingBytes, cancelToken);
-      } else {
-        final headHeaders = <String, dynamic>{};
-        if (item.customHeaders.isNotEmpty) {
-          headHeaders.addAll(item.customHeaders);
-        }
-        final headResponse = await dio.head(item.url, options: Options(headers: headHeaders));
-        final totalHeader =
-            headResponse.headers.value(HttpHeaders.contentLengthHeader) ?? '-1';
-        final total = int.tryParse(totalHeader) ?? -1;
-        item.totalBytes = total;
-
-        // Check if already fully downloaded based on disk size
-        if (existingBytes > 0 && total > 0 && existingBytes >= total) {
-          item.status = DownloadStatus.done;
-          item.speedBytesPerSec = 0;
-          item.etaSeconds = 0;
-          item.downloadedBytes = total;
-          item.totalBytes = total;
-          _cancelTokens.remove(item.id);
-          await updateStorageInfo();
-          _showiOSNotification("Download Complete", item.fileName);
-
-          if (!_isIOS) {
-            _channel.invokeMethod('stopForegroundService', {
-              'id': 1001,
-              'filename': item.fileName,
-              'success': true,
-            }).catchError((e) { debugPrint('Channel method error: $e'); });
-          }
-
-          // Finalize state
-          if (_activeCount > 0) {
-            _stopForegroundIfNoActive();
-            _activeCount--;
-          }
-          await DatabaseHelper().updateDownload(item);
-          notifyListeners();
-          _processQueue();
-          return; // Early return for completed file
-        }
-
-        await _downloadSingle(item, existingBytes, cancelToken);
+      final headHeaders = <String, dynamic>{};
+      if (item.customHeaders.isNotEmpty) {
+        headHeaders.addAll(item.customHeaders);
       }
+      final headResponse = await dio.head(item.url, options: Options(headers: headHeaders));
+      final totalHeader =
+          headResponse.headers.value(HttpHeaders.contentLengthHeader) ?? '-1';
+      final total = int.tryParse(totalHeader) ?? -1;
+      item.totalBytes = total;
+
+      // Check if already fully downloaded based on disk size
+      if (existingBytes > 0 && total > 0 && existingBytes >= total) {
+        item.status = DownloadStatus.done;
+        item.speedBytesPerSec = 0;
+        item.etaSeconds = 0;
+        item.downloadedBytes = total;
+        item.totalBytes = total;
+        _cancelTokens.remove(item.id);
+        await updateStorageInfo();
+        _showiOSNotification("Download Complete", item.fileName);
+
+        if (!_isIOS) {
+          _channel.invokeMethod('stopForegroundService', {
+            'id': 1001,
+            'filename': item.fileName,
+            'success': true,
+          }).catchError((e) { debugPrint('Channel method error: $e'); });
+        }
+
+        // Finalize state
+        if (_activeCount > 0) {
+          _stopForegroundIfNoActive();
+          _activeCount--;
+        }
+        await DatabaseHelper().updateDownload(item);
+        notifyListeners();
+        _processQueue();
+        return; // Early return for completed file
+      }
+
+      await _downloadSingle(item, existingBytes, cancelToken);
 
       item.status = DownloadStatus.done;
       item.speedBytesPerSec = 0;
@@ -968,14 +960,6 @@ class DownloadProvider with ChangeNotifier {
         headers: requestHeaders.isNotEmpty ? requestHeaders : null,
       ),
     );
-
-    // If total bytes not set by HEAD (skipHeadRequest), get from response
-    if (item.totalBytes <= 0) {
-      final totalStr = response.headers.value(HttpHeaders.contentLengthHeader);
-      if (totalStr != null) {
-        item.totalBytes = int.tryParse(totalStr) ?? 0;
-      }
-    }
 
     // CRITICAL: For pre-allocated files, FileMode.append is WRONG.
     // It will append to the END of the pre-allocated (full size) file.
