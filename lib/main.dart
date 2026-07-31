@@ -13,12 +13,14 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'screens/pin_lock_screen.dart';
 import 'screens/browser_tab.dart';
 import 'screens/download_tab.dart';
 import 'screens/proxy_tab.dart';
 import 'screens/settings_tab.dart';
 import 'screens/brwsr_tab.dart';
+import 'widgets/liquid_glass_nav_bar.dart';
 
 
 import 'providers/app_state.dart';
@@ -53,6 +55,12 @@ void main() async {
     MediaKit.ensureInitialized();
   } catch (e) {
     debugPrint('MediaKit initialization failed: $e');
+  }
+
+  try {
+    await LiquidGlassWidgets.initialize();
+  } catch (e) {
+    debugPrint('LiquidGlassWidgets initialization failed: $e');
   }
 
   Workmanager().initialize(callbackDispatcher);
@@ -90,16 +98,18 @@ void main() async {
   await ProxyTunnel().start();
 
   runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: appState),
-        ChangeNotifierProvider.value(value: proxyProvider),
-        ChangeNotifierProvider.value(value: dlProvider),
-        ChangeNotifierProvider.value(value: clipboardProvider),
-        ChangeNotifierProvider(create: (_) => BrowserProvider()),
-        ChangeNotifierProvider(create: (_) => BRWSRProvider()),
-      ],
-      child: const OpenDirAppWrapper(),
+    LiquidGlassWidgets.wrap(
+      child: MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: appState),
+          ChangeNotifierProvider.value(value: proxyProvider),
+          ChangeNotifierProvider.value(value: dlProvider),
+          ChangeNotifierProvider.value(value: clipboardProvider),
+          ChangeNotifierProvider(create: (_) => BrowserProvider()),
+          ChangeNotifierProvider(create: (_) => BRWSRProvider()),
+        ],
+        child: const OpenDirAppWrapper(),
+      ),
     ),
   );
 }
@@ -274,22 +284,12 @@ class _MainLayoutState extends State<MainLayout> {
           index: _currentIndex,
           children: _tabs,
         ),
-        bottomNavigationBar: CupertinoTabBar(
+        bottomNavigationBar: LiquidGlassNavBar(
           currentIndex: _currentIndex,
-          onTap: (index) {
+          onTabSelected: (index) {
             HapticService.light();
             setState(() => _currentIndex = index);
           },
-          activeColor: Theme.of(context).colorScheme.primary,
-          inactiveColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-          backgroundColor: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
-          items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.explore), label: 'Browser'),
-            BottomNavigationBarItem(icon: Icon(Icons.download), label: 'Downloads'),
-            BottomNavigationBarItem(icon: Icon(Icons.security), label: 'Proxy'),
-            BottomNavigationBarItem(icon: Icon(Icons.language), label: 'BRWSR'),
-            BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
-          ],
         ),
       ),
     );

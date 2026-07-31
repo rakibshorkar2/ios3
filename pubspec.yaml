@@ -68,6 +68,7 @@ dependencies:
   local_auth: ^2.2.0
 
   # Phase 4: Media & UI/UX Features
+  liquid_glass_widgets: ^0.26.1
   media_kit: ^1.1.10
   media_kit_video: ^1.2.4
   media_kit_libs_android_video: ^1.2.4
